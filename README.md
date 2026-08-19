@@ -342,32 +342,45 @@ which documents constraints that are easy to get wrong and hard to diagnose.
 | `minSdk ≤ 28` | 26 ✓ |
 | `targetSdk` > 29 | 34 — fine for porting, verified upstream to 36 |
 | `MAIN + LAUNCHER` intent-filter | Present ✓ |
-| PNG icon in `mipmap-xxxhdpi/` | Added — see `tools/make_icon.py` |
+|  PNG icon in `mipmap-xxxhdpi/` | Added — see `tools/make_icon.py` |
 | `android:icon` on the launcher activity | Added ✓ |
-| **No GMS** | See below |
+| **No GMS** | ML Kit removed; TFLite instead — see below |
 | Top 64 dp system overlay | Slideshow is dark and full-bleed; settings needs review |
 | Far-field mic unavailable to sideloaded apps | Why voice control was dropped |
 | Raw `Camera2` frames available | Why presence detection is viable |
 
-### The no-GMS problem, and ML Kit
+### The no-GMS problem, and why this uses TFLite
 
 Portal ships without Google Mobile Services (`pm list packages | grep -c gms` → 0).
-Meta's guidance lists **ML Kit** among the libraries that do not work, and recommends
-TFLite instead.
 
-This matters because `com.google.mlkit:face-detection` — the *bundled model* artifact,
-chosen here precisely to avoid GMS — declares hard dependencies on
-`play-services-base`, `play-services-basement`, `play-services-tasks` and
-`firebase-components`. Bundling the model does not bundle away the GMS shim.
+This project used ML Kit first, and it was the wrong call in an instructive way. The
+`com.google.mlkit:face-detection` artifact was chosen *specifically* because the bundled
+model variant should not need Play Services. Its POM says otherwise:
 
-So on Portal, face detection is expected to be unavailable and presence degrades to
-**motion-only**. The detector probes it once, catches `Throwable` (a missing GMS class
-arrives as `NoClassDefFoundError`, which is an *Error* — catching only `Exception` would
-turn "feature unavailable" into "app dies the first time somebody moves"), and reports
-`motion (face detection unavailable)`.
+```
+com.google.android.gms:play-services-base
+com.google.android.gms:play-services-basement
+com.google.android.gms:play-services-tasks
+com.google.firebase:firebase-components
+```
 
-Motion-only means someone sitting perfectly still for the whole absence timeout reads as
-absent. With the default 5 minutes that is rarely a problem in practice.
+Bundling the model does not bundle away the GMS shim. On Portal that fails at class
+load — and as `NoClassDefFoundError`, an *Error*, which a `catch (Exception)` around
+frame analysis would not have caught. It also weighed **~39 MB, about 85% of the APK**.
+
+It is now **TFLite** (EfficientDet-Lite0, person class), which is what Meta's Portal
+guidance recommends. Zero GMS or Firebase references across `tensorflow-lite`,
+`tflite-support` and `tflite-task-vision`, verified against their POMs, and a **4.5 MB**
+model in `assets/`.
+
+A side benefit: TFLite inference is synchronous on the analysis thread, which removes
+the whole class of bug around handing an `ImageProxy` to an async callback and closing
+it out from under the detector.
+
+If the model still fails to load, presence degrades to **motion-only** rather than
+disappearing — motion counts as presence on its own, and the detector only sharpens it.
+Motion-only means someone perfectly still for the entire absence timeout reads as
+absent; with the default 5 minutes that is rarely a problem.
 
 ---
 

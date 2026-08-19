@@ -4,9 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
-import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -14,53 +12,66 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.FaceDetection
-import com.google.mlkit.vision.face.FaceDetectorOptions
+import org.tensorflow.lite.support.image.TensorImage
+import org.tensorflow.lite.task.core.BaseOptions
+import org.tensorflow.lite.task.vision.detector.ObjectDetector
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 /**
- * Two-stage presence detection: cheap motion continuously, face confirmation on demand.
+ * Two-stage presence detection: cheap motion continuously, TFLite person detection to
+ * confirm.
  *
  * Motion alone would sleep on someone sitting still watching photos, and trip on pets
- * and curtains. Face detection alone would run a neural net on every frame forever.
- * Running the detector only when motion fires gives face-level accuracy at close to
- * motion-level cost.
+ * and curtains. Running a detector on every frame would burn a neural net forever on a
+ * wall-mounted device. Confirming only when motion fires gives most of the accuracy at
+ * close to motion-level cost.
+ *
+ * **Why TFLite and not ML Kit.** ML Kit's "bundled model" face-detection artifact was
+ * used first, chosen specifically because bundling should avoid Google Play Services.
+ * Its POM declares hard dependencies on play-services-base, play-services-basement,
+ * play-services-tasks and firebase-components. Portal ships no GMS at all, so that
+ * would fail at class-load — and it cost ~39MB, roughly 85% of the APK. TFLite has zero
+ * GMS references and a 4.5MB model, and is what Meta's Portal guidance recommends.
  *
  * **This deliberately does NOT bind to the Activity's lifecycle.** The panel powering
  * down pauses the Activity, and a lifecycle-bound camera would stop with it — leaving
- * nothing able to notice someone entering the room, so the frame could never wake. That
- * is the same trap that broke the sleep schedule. Instead this owns a [LifecycleRegistry]
- * it drives itself, tied to [start]/[stop] rather than to any UI.
+ * nothing able to notice someone entering the room, so the frame could never wake. See
+ * also [PresenceService], which keeps the process foreground so Android 9 does not
+ * revoke camera access outright.
  *
- * No frame is ever written to disk or transmitted. The only thing leaving this class is
- * a timestamp.
+ * No frame is written to disk or transmitted. The only output is a timestamp.
  */
 class PresenceDetector(private val context: Context) {
 
     companion object {
         private const val TAG = "PortalGallery"
+        private const val MODEL = "person_detect.tflite"
 
-        /** Analyse at most one frame this often. A person entering a room is not a
-         *  30fps event, and continuous inference on a wall device is heat and power. */
+        /** COCO label. EfficientDet-Lite0 is trained on 90 classes; we want one. */
+        private const val PERSON_LABEL = "person"
+
+        /** Analyse at most one frame this often. Someone entering a room is not a 30fps
+         *  event, and continuous inference on a wall device is heat and power. */
         private const val SAMPLE_INTERVAL_MS = 1_000L
 
         /** Fraction of sampled pixels that must change to count as motion. */
         private const val MOTION_THRESHOLD = 0.02f
 
-        /** Per-pixel luminance delta that counts as "changed". Above sensor noise. */
+        /** Per-pixel delta that counts as "changed". Above sensor noise. */
         private const val PIXEL_DELTA = 24
 
-        /** Sample every Nth pixel of the Y plane; full-resolution diffing is wasteful. */
-        private const val STRIDE = 8
+        /** Sample every Nth byte; full-resolution diffing is wasteful. */
+        private const val STRIDE = 16
 
-        /** Faces stay "seen" this long without re-confirmation, so a head turn or a
-         *  brief occlusion does not immediately read as an empty room. */
-        private const val FACE_GRACE_MS = 20_000L
+        /** Confidence floor for a person detection. */
+        private const val SCORE_THRESHOLD = 0.4f
 
-        /** How often to retry a camera that went away. */
+        /** A confirmed person stays "present" this long without re-confirmation, so
+         *  someone sitting still is not repeatedly re-verified. */
+        private const val PERSON_GRACE_MS = 20_000L
+
         private const val RECOVERY_INTERVAL_MS = 30_000L
     }
 
@@ -70,66 +81,56 @@ class PresenceDetector(private val context: Context) {
     var status: Status = Status.UNAVAILABLE
         private set
 
-    /** Wall-clock of the last confirmed person. 0 if never. */
     @Volatile
     var lastPresenceMs: Long = 0L
         private set
 
     /**
-     * When detection began. Used as the reference point before anyone has been seen, so
-     * a freshly started frame does not immediately count as an empty room and sleep on
+     * When detection began. The reference point before anyone has been seen, so a
+     * freshly started frame does not immediately count as an empty room and sleep on
      * whoever just walked up to it.
      */
     @Volatile
     var startedAtMs: Long = 0L
         private set
 
-    /** Most recent evidence of presence, or of having only just started looking. */
-    val referenceMs: Long get() = maxOf(lastPresenceMs, startedAtMs)
-
     @Volatile
     var lastReason: String = "not started"
         private set
+
+    val referenceMs: Long get() = maxOf(lastPresenceMs, startedAtMs)
 
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
 
     private var provider: ProcessCameraProvider? = null
-    private var previousLuma: ByteArray? = null
+    private var previousFrame: ByteArray? = null
     private var lastSampleMs = 0L
-    private var lastFaceMs = 0L
-    private val faceInFlight = AtomicBoolean(false)
+    private var lastPersonMs = 0L
+
+    @Volatile
+    private var lastRecoveryAttemptMs = 0L
 
     /**
-     * ML Kit face detection, or null when it cannot run.
-     *
-     * **Portal has no Google Mobile Services**, and `com.google.mlkit:face-detection`
-     * — despite being the "bundled model" artifact — declares hard dependencies on
-     * `play-services-base`, `play-services-basement`, `play-services-tasks` and
-     * `firebase-components`. Meta's own Portal guidance lists ML Kit as non-functional
-     * and points to TFLite instead.
-     *
-     * So on Portal this is expected to be null, and detection degrades to motion-only.
-     * On a GMS device (an emulator, say) it initialises and adds face confirmation.
-     *
-     * The catch is deliberately `Throwable`: a missing GMS class surfaces as
-     * `NoClassDefFoundError`, which is an Error, not an Exception. Catching only
-     * Exception here is what would turn "feature unavailable" into "app dies the first
-     * time somebody moves".
+     * Loaded lazily and defensively. A model that fails to load must degrade to
+     * motion-only, never take the app down — and the catch is `Throwable` because a
+     * missing native library surfaces as `UnsatisfiedLinkError`, an Error rather than
+     * an Exception.
      */
-    private val faceDetector: com.google.mlkit.vision.face.FaceDetector? by lazy {
+    private val detector: ObjectDetector? by lazy {
         try {
-            FaceDetection.getClient(
-                FaceDetectorOptions.Builder()
-                    // FAST over ACCURATE: we need "is a face there", not landmarks, and
-                    // this runs indefinitely.
-                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                    .setMinFaceSize(0.1f)
-                    .build()
-            )
+            ObjectDetector.createFromFileAndOptions(
+                context,
+                MODEL,
+                ObjectDetector.ObjectDetectorOptions.builder()
+                    .setBaseOptions(BaseOptions.builder().setNumThreads(2).build())
+                    .setMaxResults(5)
+                    .setScoreThreshold(SCORE_THRESHOLD)
+                    .build(),
+            ).also { Log.i(TAG, "TFLite person detector loaded") }
         } catch (t: Throwable) {
-            Log.w(TAG, "face detection unavailable (${t.javaClass.simpleName}) — " +
-                "falling back to motion-only presence")
+            Log.w(TAG, "person detector unavailable (${t.javaClass.simpleName}: ${t.message}) " +
+                "— falling back to motion-only presence")
             null
         }
     }
@@ -162,12 +163,10 @@ class PresenceDetector(private val context: Context) {
     /**
      * Tries every camera the device reports, in turn, until one binds.
      *
-     * Necessary on Portal specifically. It exposes two cameras, both front-facing, and
-     * Portal's own `com.facebook.portal.aiservice` holds one of them open more or less
-     * permanently at a high priority score. A fixed DEFAULT_FRONT_CAMERA selector is a
-     * coin flip between the free camera and the occupied one; picking the occupied one
-     * fails to bind and presence would report unavailable on a device that is perfectly
-     * capable of it.
+     * Necessary on Portal specifically: it exposes two cameras, both front-facing, and
+     * Portal's own `com.facebook.portal.aiservice` holds one open more or less
+     * permanently at high priority. A fixed selector is a coin flip between the free
+     * camera and the occupied one.
      */
     private fun bind(cameraProvider: ProcessCameraProvider) {
         provider = cameraProvider
@@ -180,8 +179,6 @@ class PresenceDetector(private val context: Context) {
 
         lifecycleOwner.registry.currentState = Lifecycle.State.RESUMED
 
-        // Prefer any camera the default front selector matches, then fall back to the
-        // rest — the occupied one is usually the one the system reaches for first.
         val ordered = cameras.sortedByDescending { info ->
             runCatching {
                 CameraSelector.DEFAULT_FRONT_CAMERA.filter(listOf(info)).isNotEmpty()
@@ -190,7 +187,13 @@ class PresenceDetector(private val context: Context) {
 
         for ((index, info) in ordered.withIndex()) {
             val analysis = ImageAnalysis.Builder()
-                // Only the newest frame matters; queueing would add latency for no gain.
+                // RGBA rather than YUV: it makes both stages simple — motion diffs the
+                // bytes directly, and toBitmap() feeds the detector with no colour
+                // conversion of our own.
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                // Small on purpose. The detector downsamples to 320x320 anyway, and a
+                // smaller stream is less memory, less heat, and faster diffing.
+                .setTargetResolution(android.util.Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .apply { setAnalyzer(analysisExecutor, ::analyse) }
@@ -221,7 +224,7 @@ class PresenceDetector(private val context: Context) {
         }
         status = Status.UNAVAILABLE
         lastReason = "stopped"
-        previousLuma = null
+        previousFrame = null
         Log.i(TAG, "presence detection stopped")
     }
 
@@ -234,94 +237,80 @@ class PresenceDetector(private val context: Context) {
     }
 
     /**
-     * Re-opens the camera if it was lost.
-     *
-     * Android 9 disconnects the camera from background processes. PresenceService should
-     * prevent that, but a system-initiated disconnect (another app taking the camera at
-     * higher priority, for instance) would otherwise leave detection dead until the app
-     * restarted — and while it is dead the frame falls back to the schedule and may
-     * never wake on presence again.
+     * Re-opens the camera if it was lost — a system disconnect would otherwise leave
+     * detection dead until the app restarted, and while asleep a dead camera means the
+     * frame can never wake on presence.
      */
     fun recoverIfStopped() {
         if (status != Status.UNAVAILABLE || running.get()) return
         val now = System.currentTimeMillis()
-        // Throttled: without this a permanently unavailable camera — no permission, or
-        // Portal's own service holding both — would retry on every tick, forever.
+        // Throttled: a permanently unavailable camera would otherwise retry every tick.
         if (now - lastRecoveryAttemptMs < RECOVERY_INTERVAL_MS) return
         lastRecoveryAttemptMs = now
         Log.i(TAG, "attempting to recover presence detection ($lastReason)")
         start()
     }
 
-    @Volatile
-    private var lastRecoveryAttemptMs = 0L
-
-    @OptIn(ExperimentalGetImage::class)
+    /**
+     * Unlike the previous ML Kit implementation, inference here is **synchronous** on
+     * the analysis thread. That removes the whole class of bug around handing an
+     * ImageProxy to an async callback and closing it out from under the detector — the
+     * proxy is simply closed when this returns.
+     */
     private fun analyse(proxy: ImageProxy) {
-        // ML Kit reads the underlying image asynchronously. Closing the proxy while a
-        // detection is in flight frees memory out from under it — so ownership passes to
-        // the completion listener whenever we hand a frame over, and only the paths that
-        // do NOT hand it over close it here.
-        var handedToDetector = false
         try {
             val now = System.currentTimeMillis()
             if (now - lastSampleMs < SAMPLE_INTERVAL_MS) return
             lastSampleMs = now
 
-            // A recently confirmed face keeps presence alive without re-running the
+            // A recently confirmed person keeps presence alive without re-running the
             // detector, so someone sitting still is not repeatedly re-verified.
-            if (now - lastFaceMs < FACE_GRACE_MS) {
+            if (now - lastPersonMs < PERSON_GRACE_MS) {
                 lastPresenceMs = now
                 return
             }
 
             if (!hasMotion(proxy)) return
 
-            // Motion counts as presence on its own. This is what keeps the frame usable
-            // when face detection cannot run — without it, a Portal (no GMS, so no ML
-            // Kit) would detect nothing and never wake.
+            // Motion counts as presence on its own. This is what keeps the feature
+            // working if the model cannot load — without it, a failed detector would
+            // mean nothing is ever detected and the frame never wakes.
             lastPresenceMs = now
 
-            val detector = faceDetector
-            if (detector == null) {
-                lastReason = "motion (face detection unavailable)"
+            val model = detector
+            if (model == null) {
+                lastReason = "motion (person detection unavailable)"
                 return
             }
 
-            val image = proxy.image ?: return
-            if (faceInFlight.getAndSet(true)) return
+            val bitmap = runCatching { proxy.toBitmap() }.getOrNull() ?: return
+            val results = model.detect(TensorImage.fromBitmap(bitmap))
+            val people = results.count { detection ->
+                detection.categories.any {
+                    it.label.equals(PERSON_LABEL, ignoreCase = true) &&
+                        it.score >= SCORE_THRESHOLD
+                }
+            }
 
-            val input = InputImage.fromMediaImage(image, proxy.imageInfo.rotationDegrees)
-            handedToDetector = true
-            detector.process(input)
-                .addOnSuccessListener { faces ->
-                    if (faces.isNotEmpty()) {
-                        lastFaceMs = System.currentTimeMillis()
-                        lastPresenceMs = lastFaceMs
-                        lastReason = "${faces.size} face(s) in view"
-                    } else {
-                        lastReason = "motion but no face"
-                    }
-                }
-                .addOnFailureListener { lastReason = "face detection failed: ${it.message}" }
-                .addOnCompleteListener {
-                    faceInFlight.set(false)
-                    proxy.close()
-                }
+            if (people > 0) {
+                lastPersonMs = System.currentTimeMillis()
+                lastPresenceMs = lastPersonMs
+                lastReason = "$people person(s) in view"
+            } else {
+                lastReason = "motion but no person"
+            }
         } catch (t: Throwable) {
-            // Throwable, not Exception: a missing GMS class arrives as NoClassDefFoundError.
-            // A frame analysis failure must never take the app down.
+            // Throwable, not Exception: a missing native library arrives as
+            // UnsatisfiedLinkError. A frame analysis failure must never take the app down.
             Log.w(TAG, "frame analysis failed: ${t.javaClass.simpleName}: ${t.message}")
-            faceInFlight.set(false)
         } finally {
-            if (!handedToDetector) proxy.close()
+            proxy.close()
         }
     }
 
     /**
-     * Luminance frame differencing on a strided sample of the Y plane. Cheap enough to
-     * run on every sampled frame; its only job is to decide whether the face detector
-     * is worth waking.
+     * Frame differencing on a strided sample of the RGBA plane. Cheap enough to run on
+     * every sampled frame; its only job is to decide whether inference is worth doing.
      */
     private fun hasMotion(proxy: ImageProxy): Boolean {
         val plane = proxy.planes.firstOrNull() ?: return false
@@ -337,8 +326,8 @@ class PresenceDetector(private val context: Context) {
             pos += STRIDE
         }
 
-        val prev = previousLuma
-        previousLuma = sampled
+        val prev = previousFrame
+        previousFrame = sampled
         if (prev == null || prev.size != sampled.size) return false
 
         var changed = 0

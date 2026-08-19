@@ -46,13 +46,19 @@
 -keep class com.example.portalgallery.ui.slideshow.SlideshowActivity { *; }
 -keep class com.example.portalgallery.data.schedule.** { *; }
 
-# --- Presence detection (CameraX + ML Kit) ------------------------------------
-# ML Kit loads its bundled model through reflection and native bridges; stripping or
-# renaming those leaves face detection silently failing in release builds only, which
-# would look like "presence never detects anyone" rather than like a build problem.
--keep class com.google.mlkit.** { *; }
--keep class com.google.android.gms.internal.mlkit_** { *; }
--dontwarn com.google.mlkit.**
+# --- Presence detection (CameraX + TFLite) ------------------------------------
+# TFLite reaches its native layer through JNI and reads model metadata reflectively.
+# Stripping or renaming those leaves person detection failing in release builds only —
+# which presents as "presence never detects anyone" rather than as a build error.
+-keep class org.tensorflow.** { *; }
+-keep class org.tensorflow.lite.** { *; }
+-keep class org.tensorflow.lite.task.** { *; }
+-keep class org.tensorflow.lite.support.** { *; }
+-dontwarn org.tensorflow.**
+
+# The GPU delegate is referenced by the task library but not bundled here; without this
+# R8 warns on the missing classes and can fail the build.
+-dontwarn org.tensorflow.lite.gpu.**
 
 -keep class androidx.camera.** { *; }
 -dontwarn androidx.camera.**

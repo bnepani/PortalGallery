@@ -61,6 +61,13 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 
+    androidResources {
+        // TFLite models must stay uncompressed so the interpreter can memory-map them
+        // straight out of the APK. Compressed, loading either fails or forces a full
+        // copy into heap.
+        noCompress += "tflite"
+    }
+
     signingConfigs {
         if (hasSigning) {
             create("release") {
@@ -128,10 +135,18 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
 
-    // BUNDLED face detection, not play-services-mlkit-face-detection: Portal is a
-    // non-GMS device, so the Play-Services-backed variant would never initialise.
-    // Costs roughly 20MB of APK for the on-device model.
-    implementation("com.google.mlkit:face-detection:16.1.6")
+    // TFLite, not ML Kit. The "bundled model" ML Kit artifact
+    // (com.google.mlkit:face-detection) was chosen precisely to avoid GMS and turned out
+    // to declare hard dependencies on play-services-base/basement/tasks and
+    // firebase-components — so on Portal, which ships no GMS at all, it would fail at
+    // class-load. It also weighed ~39MB, about 85% of the APK.
+    //
+    // These three pull in zero GMS or Firebase references, verified against their POMs,
+    // and the model is 4.5MB in assets. This is the path Meta's own Portal guidance
+    // recommends in place of ML Kit.
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
     testImplementation("junit:junit:4.13.2")
 }
