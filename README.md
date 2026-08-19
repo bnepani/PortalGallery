@@ -44,8 +44,16 @@ adb shell am start -n com.example.portalgallery/.ui.slideshow.SlideshowActivity 
 
 Persists to `SharedPreferences` and takes precedence over the built-in default.
 
-**Change the built-in default** (survives `pm clear`, applies to fresh installs):
-edit `DEFAULT_ALBUM_URL` in `app/build.gradle.kts`, then reinstall.
+**Change the built-in default** (survives `pm clear`, applies to fresh installs): add it
+to `local.properties`, which is gitignored — a share link is effectively a capability and
+must never be committed.
+
+```properties
+portalgallery.albumUrl=https://photos.app.goo.gl/YOURLINK
+```
+
+Then reinstall. A fresh clone builds with an empty default, which is correct: whoever
+clones this sets their own album.
 
 **Reset to the built-in default:**
 
@@ -136,10 +144,10 @@ play silently and the settings screen says so rather than pretending sound is on
 Off by default. Enable in on-device settings; the frame then wakes when someone is in
 the room and sleeps after an empty room for N minutes (default 5).
 
-**Two-stage detection.** A cheap luminance frame-difference check samples one frame a
-second; only when that fires does ML Kit's bundled face detector run. Motion alone would
-sleep on someone sitting still watching photos and would trip on pets and curtains; face
-detection on every frame would run a neural net forever on a wall-mounted device.
+**Two-stage detection.** A cheap frame-difference check samples one frame a second; only
+when that fires does the TFLite person detector run. Motion alone would sleep on someone
+sitting still watching photos and would trip on pets and curtains; running inference on
+every frame would burn a neural net forever on a wall-mounted device.
 
 **Nothing leaves the device.** No frame is written to disk or transmitted. The only
 output is a timestamp.
