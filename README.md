@@ -331,6 +331,46 @@ the scrubber and the diff shows exactly what moved.
 
 ---
 
+## Portal platform notes
+
+Checked against Meta's own Portal skill
+([meta-quest/agentic-tools](https://github.com/meta-quest/agentic-tools/tree/main/skills/portal)),
+which documents constraints that are easy to get wrong and hard to diagnose.
+
+| Constraint | Status here |
+|---|---|
+| `minSdk ≤ 28` | 26 ✓ |
+| `targetSdk` > 29 | 34 — fine for porting, verified upstream to 36 |
+| `MAIN + LAUNCHER` intent-filter | Present ✓ |
+| PNG icon in `mipmap-xxxhdpi/` | Added — see `tools/make_icon.py` |
+| `android:icon` on the launcher activity | Added ✓ |
+| **No GMS** | See below |
+| Top 64 dp system overlay | Slideshow is dark and full-bleed; settings needs review |
+| Far-field mic unavailable to sideloaded apps | Why voice control was dropped |
+| Raw `Camera2` frames available | Why presence detection is viable |
+
+### The no-GMS problem, and ML Kit
+
+Portal ships without Google Mobile Services (`pm list packages | grep -c gms` → 0).
+Meta's guidance lists **ML Kit** among the libraries that do not work, and recommends
+TFLite instead.
+
+This matters because `com.google.mlkit:face-detection` — the *bundled model* artifact,
+chosen here precisely to avoid GMS — declares hard dependencies on
+`play-services-base`, `play-services-basement`, `play-services-tasks` and
+`firebase-components`. Bundling the model does not bundle away the GMS shim.
+
+So on Portal, face detection is expected to be unavailable and presence degrades to
+**motion-only**. The detector probes it once, catches `Throwable` (a missing GMS class
+arrives as `NoClassDefFoundError`, which is an *Error* — catching only `Exception` would
+turn "feature unavailable" into "app dies the first time somebody moves"), and reports
+`motion (face detection unavailable)`.
+
+Motion-only means someone sitting perfectly still for the whole absence timeout reads as
+absent. With the default 5 minutes that is rarely a problem in practice.
+
+---
+
 ## Known limits
 
 - **300 photos per album.** The share page returns a 300-item prefix with a continuation

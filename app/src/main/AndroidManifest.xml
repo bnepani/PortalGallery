@@ -29,7 +29,7 @@
     <application
         android:name=".PortalGalleryApp"
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.PortalGallery">
 
@@ -39,9 +39,16 @@
           there is no reason to ship the album URL either.
         -->
 
+        <!--
+          android:icon is declared here as well as on <application>. Portal's launcher
+          reads it from the launcher activity, and reads a PNG from mipmap-xxxhdpi —
+          an app with only a vector/adaptive icon has no visible home-screen icon at
+          all. It installs, it runs via adb, and nobody can find it.
+        -->
         <activity
             android:name=".ui.slideshow.SlideshowActivity"
             android:exported="true"
+            android:icon="@mipmap/ic_launcher"
             android:launchMode="singleTask"
             android:theme="@style/Theme.PortalGallery.Fullscreen"
             android:resizeableActivity="false"

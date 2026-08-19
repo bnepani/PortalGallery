@@ -3,7 +3,7 @@
 **Date:** 2026-08-17
 **Status:** **Implemented (Phases 1–3), running on emulator.** §4 was refuted by review
 and rewritten; see the note below and §10 for corrections already applied in code.
-**Author:** Contributor A (with Claude Code)
+**Author:** bnepani (with Claude Code)
 
 > **Review outcome (2026-08-17): all three reviewers returned NEEDS_REVISION.**
 > See `design-review-architecture.md`, `design-review-android.md`, `design-review-risk.md`.

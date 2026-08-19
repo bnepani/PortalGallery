@@ -100,15 +100,38 @@ class PresenceDetector(private val context: Context) {
     private var lastFaceMs = 0L
     private val faceInFlight = AtomicBoolean(false)
 
-    private val faceDetector by lazy {
-        FaceDetection.getClient(
-            FaceDetectorOptions.Builder()
-                // FAST over ACCURATE: we need "is a face there", not landmarks. Also
-                // materially cheaper, which matters when this runs indefinitely.
-                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                .setMinFaceSize(0.1f)
-                .build()
-        )
+    /**
+     * ML Kit face detection, or null when it cannot run.
+     *
+     * **Portal has no Google Mobile Services**, and `com.google.mlkit:face-detection`
+     * — despite being the "bundled model" artifact — declares hard dependencies on
+     * `play-services-base`, `play-services-basement`, `play-services-tasks` and
+     * `firebase-components`. Meta's own Portal guidance lists ML Kit as non-functional
+     * and points to TFLite instead.
+     *
+     * So on Portal this is expected to be null, and detection degrades to motion-only.
+     * On a GMS device (an emulator, say) it initialises and adds face confirmation.
+     *
+     * The catch is deliberately `Throwable`: a missing GMS class surfaces as
+     * `NoClassDefFoundError`, which is an Error, not an Exception. Catching only
+     * Exception here is what would turn "feature unavailable" into "app dies the first
+     * time somebody moves".
+     */
+    private val faceDetector: com.google.mlkit.vision.face.FaceDetector? by lazy {
+        try {
+            FaceDetection.getClient(
+                FaceDetectorOptions.Builder()
+                    // FAST over ACCURATE: we need "is a face there", not landmarks, and
+                    // this runs indefinitely.
+                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                    .setMinFaceSize(0.1f)
+                    .build()
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "face detection unavailable (${t.javaClass.simpleName}) — " +
+                "falling back to motion-only presence")
+            null
+        }
     }
 
     /** Self-driven so the camera survives the Activity being paused by screen-off. */
@@ -254,12 +277,23 @@ class PresenceDetector(private val context: Context) {
 
             if (!hasMotion(proxy)) return
 
+            // Motion counts as presence on its own. This is what keeps the frame usable
+            // when face detection cannot run — without it, a Portal (no GMS, so no ML
+            // Kit) would detect nothing and never wake.
+            lastPresenceMs = now
+
+            val detector = faceDetector
+            if (detector == null) {
+                lastReason = "motion (face detection unavailable)"
+                return
+            }
+
             val image = proxy.image ?: return
             if (faceInFlight.getAndSet(true)) return
 
             val input = InputImage.fromMediaImage(image, proxy.imageInfo.rotationDegrees)
             handedToDetector = true
-            faceDetector.process(input)
+            detector.process(input)
                 .addOnSuccessListener { faces ->
                     if (faces.isNotEmpty()) {
                         lastFaceMs = System.currentTimeMillis()
@@ -274,8 +308,11 @@ class PresenceDetector(private val context: Context) {
                     faceInFlight.set(false)
                     proxy.close()
                 }
-        } catch (e: Exception) {
-            Log.w(TAG, "frame analysis failed: ${e.message}")
+        } catch (t: Throwable) {
+            // Throwable, not Exception: a missing GMS class arrives as NoClassDefFoundError.
+            // A frame analysis failure must never take the app down.
+            Log.w(TAG, "frame analysis failed: ${t.javaClass.simpleName}: ${t.message}")
+            faceInFlight.set(false)
         } finally {
             if (!handedToDetector) proxy.close()
         }
