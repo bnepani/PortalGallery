@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Required to power the display back on at the end of quiet hours. Window flags
+         cannot do this: FLAG_KEEP_SCREEN_ON only prevents a screen from sleeping. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Alarms do not survive a reboot, so a restart during quiet hours would otherwise
+         leave the frame dark indefinitely. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Presence detection. Optional: if the camera is absent, the shutter is closed,
+         or the permission is not granted, the frame falls back to its quiet-hours
+         schedule rather than treating an unanswerable camera as an empty room.
+         Grant on a wall device with:
+           adb shell pm grant com.example.portalgallery android.permission.CAMERA -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 9 disconnects the camera from background processes. Without a foreground
+         service the frame can detect absence but never presence, because the camera dies
+         the moment the panel powers off. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false" />
+
+    <application
+        android:name=".PortalGalleryApp"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.PortalGallery">
+
+        <!--
+          allowBackup is false: Auto Backup would otherwise ship SharedPreferences
+          off-device. That mattered acutely when this app stored OAuth tokens, and
+          there is no reason to ship the album URL either.
+        -->
+
+        <activity
+            android:name=".ui.slideshow.SlideshowActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.PortalGallery.Fullscreen"
+            android:resizeableActivity="false"
+            android:configChanges="uiMode|orientation|screenSize|smallestScreenSize|screenLayout|density|fontScale|locale|layoutDirection|keyboardHidden|navigation">
+
+            <!--
+              configChanges is broad on purpose. The theme is DayNight, so without
+              uiMode the Activity is destroyed and recreated on every scheduled
+              day/night transition — twice a day, each time restarting the slideshow
+              from index 0.
+
+              screenOrientation is deliberately absent (i.e. "unspecified"). The frame
+              must follow the Portal's physical orientation so it can show only
+              portrait photos when mounted portrait and only landscape when mounted
+              landscape. "locked" would pin it to whatever it booted in and the filter
+              would never re-evaluate; "landscape" would let the framework choose
+              rotation 90 or 270 on hardware with a portrait natural orientation,
+              risking an upside-down frame. Letting the system decide avoids both.
+
+              orientation|screenSize in configChanges means rotation is handled in
+              onConfigurationChanged rather than by destroying the Activity.
+            -->
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Reached by long-pressing the frame. Not exported: nothing outside the app
+          should be able to open it. Uses the non-fullscreen theme so the on-screen
+          keyboard and dialogs behave normally.
+        -->
+        <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PortalGallery"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="uiMode|orientation|screenSize|smallestScreenSize|screenLayout|density|fontScale|locale|layoutDirection|keyboardHidden|navigation" />
+
+        <!-- Fired by our own exact alarm at the end of quiet hours. Not exported:
+             nothing outside the app should be able to trigger a wake. -->
+        <receiver
+            android:name=".data.schedule.WakeAlarm$Receiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.portalgallery.ACTION_WAKE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Runs only while presence detection is enabled. Holds the process foreground
+             so Android 9 does not revoke camera access once the panel powers off. -->
+        <service
+            android:name=".data.presence.PresenceService"
+            android:exported="false" />
+
+        <!-- exported=true is required for system broadcasts like BOOT_COMPLETED. -->
+        <receiver
+            android:name=".data.schedule.BootReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

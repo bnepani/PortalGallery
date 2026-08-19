@@ -1,0 +1,34 @@
+# Raw shared-album captures contain the live share link, ?key= access tokens,
+# contributor names, Gaia account ids and avatar URLs. Never commit them.
+# Run tools/scrub_fixture.py to produce the committable test fixture instead.
+album-fixture.html
+*-fixture-raw.html
+
+# Signing. Never commit these: the keystore IS the app's identity, and the properties
+# file holds its passwords. Losing the keystore means future builds cannot update an
+# installed app — only uninstall/reinstall, which wipes the photo library and settings.
+# Back it up somewhere outside the repo.
+keystore.properties
+*.jks
+*.keystore
+
+# Archived copy of the deleted OAuth stack. Contains a real (revoked) Google client
+# secret; GitHub's secret scanning would flag it and it should not be published either
+# way. Kept locally as a backup only.
+docs/removed/
+
+# Device probe output — machine-specific, and no reason to publish hardware details.
+docs/portal-device-facts.txt
+
+# Build
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+
+.DS_Store

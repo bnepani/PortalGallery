@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Two ImageViews with SWAPPED ROLES, not a fixed front/back pair. Each advance loads
+  into whichever view is currently hidden, animates the pair, then flips which one is
+  considered live.
+
+  The original version of this layout copied one Drawable into both views. A Drawable
+  carries a single Callback and shared bounds/alpha state, so that arrangement produced
+  intermittent rendering oddities. Role swapping means each view owns its own drawable
+  and Glide clears the previous request automatically (ViewTarget is keyed on the view).
+-->
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <ImageView
+        android:id="@+id/iv_photo_a"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter" />
+
+    <ImageView
+        android:id="@+id/iv_photo_b"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter" />
+
+    <!--
+      Sits above the photo layers and is only visible while a clip plays. A plain
+      VideoView rather than ExoPlayer/Media3: these are local MP4 files off disk, which
+      MediaPlayer handles fine, and Media3 would add several megabytes of dependency for
+      capabilities this never uses.
+    -->
+    <VideoView
+        android:id="@+id/vv_video"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:text="@string/status_first_sync"
+        android:textColor="#CCFFFFFF"
+        android:textSize="20sp" />
+
+    <ImageView
+        android:id="@+id/iv_pause_overlay"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="center"
+        android:alpha="0.75"
+        android:contentDescription="@null"
+        android:src="@android:drawable/ic_media_pause"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:text="@string/hint_controls"
+        android:textColor="#55FFFFFF"
+        android:textSize="12sp" />
+
+</FrameLayout>

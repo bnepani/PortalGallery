@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sized for a wall-mounted Portal+: 1920x1080 at density 160, so 1dp ≈ 1px and the
+  default Material text sizes read as tiny from across a room. Everything here is
+  deliberately oversized.
+-->
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0E0E10"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="48dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/settings_title"
+            android:textColor="#FFFFFF"
+            android:textSize="40sp"
+            android:textStyle="bold" />
+
+        <!-- Transition -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_transition" />
+
+        <RadioGroup
+            android:id="@+id/rg_transition"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/tv_duration_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_duration" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_duration"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="100"
+            android:valueFrom="200"
+            android:valueTo="3000" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_ken_burns"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:minHeight="64dp"
+            android:text="@string/settings_ken_burns"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <!-- Timing -->
+        <TextView
+            android:id="@+id/tv_interval_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_interval" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="1"
+            android:valueFrom="3"
+            android:valueTo="120" />
+
+        <!-- Quiet hours -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_quiet_hours" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_sleep"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_sleep_enable"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_sleep_start"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_marginEnd="16dp"
+                android:layout_weight="1"
+                android:textSize="24sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_sleep_end"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="80dp"
+                android:layout_weight="1"
+                android:textSize="24sp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_sleep_now"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="80dp"
+            android:layout_marginTop="16dp"
+            android:text="@string/settings_sleep_now"
+            android:textSize="24sp" />
+
+        <!-- Videos -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_video" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_video"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_video_enable"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/tv_video_explain"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/settings_video_explain"
+            android:textColor="#999999"
+            android:textSize="18sp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_video_audio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="64dp"
+            android:text="@string/settings_video_audio"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/tv_volume_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_volume" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_volume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="5"
+            android:valueFrom="0"
+            android:valueTo="100" />
+
+        <!-- Presence -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_presence" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_presence"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_presence_enable"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/settings_presence_explain"
+            android:textColor="#999999"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/tv_absence_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_absence" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_absence"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="1"
+            android:valueFrom="1"
+            android:valueTo="60" />
+
+        <TextView
+            android:id="@+id/tv_presence_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#AAAAAA"
+            android:textSize="20sp" />
+
+        <!-- Album, read-only. Typing a share URL on a wall-mounted keyboard is
+             unpleasant and a typo silently breaks the frame; changing it stays adb. -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_album" />
+
+        <TextView
+            android:id="@+id/tv_album_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#AAAAAA"
+            android:textIsSelectable="true"
+            android:textSize="20sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_close"
+            android:layout_width="match_parent"
+            android:layout_height="96dp"
+            android:layout_marginTop="48dp"
+            android:text="@string/settings_close"
+            android:textSize="28sp" />
+
+    </LinearLayout>
+</ScrollView>

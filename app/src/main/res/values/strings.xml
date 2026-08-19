@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Portal Gallery</string>
+    <string name="status_first_sync">Syncing photos…</string>
+    <string name="hint_controls">Tap to pause  •  Hold for settings</string>
+    <string name="status_no_album">No shared album configured.\n\nSet one with:\nadb shell am start -n com.example.portalgallery/.ui.slideshow.SlideshowActivity -e album_url \"&lt;link&gt;\"</string>
+
+    <string name="settings_title">Portal Gallery</string>
+    <string name="settings_transition">Transition</string>
+    <string name="settings_duration">Transition speed</string>
+    <string name="settings_ken_burns">Slow pan &amp; zoom (Ken Burns)</string>
+    <string name="settings_interval">Time per photo</string>
+    <string name="settings_quiet_hours">Quiet hours</string>
+    <string name="settings_sleep_enable">Sleep on a schedule</string>
+    <string name="settings_sleep_now">Sleep now</string>
+    <string name="settings_wake_now">Wake now</string>
+    <string name="presence_channel_name">Presence detection</string>
+    <string name="presence_channel_desc">Keeps the camera available while the frame is asleep, so it can wake when someone enters the room.</string>
+    <string name="presence_notification_title">Portal Gallery</string>
+    <string name="presence_notification_text">Watching for someone in the room</string>
+
+    <string name="settings_video">Videos</string>
+    <string name="settings_video_enable">Play videos from the album</string>
+    <string name="settings_video_explain">Clips download at original quality and can be much larger than photos — expect the library to grow considerably. Videos play in full before moving on.</string>
+    <string name="settings_video_audio">Play sound (only when someone is in view)</string>
+    <string name="settings_volume">Volume</string>
+    <string name="settings_presence">Presence detection</string>
+    <string name="settings_presence_enable">Wake when someone is in the room</string>
+    <string name="settings_presence_explain">Uses the camera to detect a person. Everything is processed on this device — no image is saved or sent anywhere. Closing the privacy shutter turns this off and the frame falls back to the quiet-hours schedule.</string>
+    <string name="settings_absence">Sleep after an empty room for</string>
+    <string name="settings_album">Album</string>
+    <string name="settings_close">Back to photos</string>
+</resources>
