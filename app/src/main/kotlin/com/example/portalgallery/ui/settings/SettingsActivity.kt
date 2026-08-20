@@ -14,6 +14,7 @@ import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.store.PhotoStore
 import com.example.portalgallery.databinding.ActivitySettingsBinding
 import com.example.portalgallery.prefs.AppPreferences
+import com.example.portalgallery.ui.AppForeground
 import com.example.portalgallery.ui.slideshow.Transition
 import java.text.DateFormat
 import java.time.LocalTime
@@ -279,7 +280,15 @@ class SettingsActivity : AppCompatActivity() {
     /** Re-read on return in case the slideshow changed something (e.g. wake-on-tap). */
     override fun onResume() {
         super.onResume()
+        // Counts as app-visible, so PresenceService does not relaunch the slideshow
+        // over the top of the settings screen while someone stands at the frame.
+        AppForeground.onActivityResumed()
         binding.swSleep.isChecked = prefs.sleepEnabled
         refreshSleepButtons()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        AppForeground.onActivityPaused()
     }
 }

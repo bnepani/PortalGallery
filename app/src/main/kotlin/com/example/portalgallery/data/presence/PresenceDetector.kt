@@ -49,6 +49,22 @@ class PresenceDetector(private val context: Context) {
         private const val TAG = "PortalGallery"
         private const val MODEL = "person_detect.tflite"
 
+        /**
+         * Process-wide instance, owned by [PresenceService] rather than by any Activity.
+         *
+         * Detection has to outlive the frame's Activity. On Portal the panel cycling
+         * off and on hands the foreground to the launcher, and the Activity can be
+         * destroyed outright under memory pressure — if the detector went with it,
+         * nothing would be left to notice someone entering the room.
+         */
+        @Volatile
+        private var instance: PresenceDetector? = null
+
+        fun get(context: Context): PresenceDetector =
+            instance ?: synchronized(this) {
+                instance ?: PresenceDetector(context.applicationContext).also { instance = it }
+            }
+
         /** COCO label. EfficientDet-Lite0 is trained on 90 classes; we want one. */
         private const val PERSON_LABEL = "person"
 

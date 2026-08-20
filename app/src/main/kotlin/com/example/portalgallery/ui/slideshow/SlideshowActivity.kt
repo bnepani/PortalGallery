@@ -33,6 +33,7 @@ import com.example.portalgallery.data.store.AlbumSync
 import com.example.portalgallery.data.store.PhotoStore
 import com.example.portalgallery.databinding.ActivitySlideshowBinding
 import com.example.portalgallery.prefs.AppPreferences
+import com.example.portalgallery.ui.AppForeground
 import com.example.portalgallery.ui.settings.SettingsActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -65,6 +66,17 @@ class SlideshowActivity : AppCompatActivity() {
         /** Faster tick when presence drives the frame — waiting up to a minute for the
          *  photos to come back after walking into the room would feel broken. */
         private const val PRESENCE_TICK_MS = 3_000L
+
+        /**
+         * Whether the slideshow specifically is on screen. Used locally to decide
+         * whether waking needs to pull the Activity forward.
+         *
+         * Distinct from [AppForeground], which is process-wide and is what
+         * PresenceService consults — the settings screen counts as "app visible" but
+         * not as "slideshow visible".
+         */
+        @Volatile
+        private var isInForeground: Boolean = false
         private const val HINT_VISIBLE_MS = 8_000L
 
         /** How far Ken Burns zooms over a full dwell. Subtle on purpose. */
@@ -128,7 +140,9 @@ class SlideshowActivity : AppCompatActivity() {
 
         prefs = AppPreferences(this)
         store = PhotoStore(this)
-        presence = PresenceDetector(applicationContext)
+        // Shared with PresenceService, which owns its lifecycle. The Activity only reads
+        // state from it — detection must outlive this Activity.
+        presence = PresenceDetector.get(this)
         startPresenceIfEnabled()
 
         applyConfigIntent(intent)
@@ -349,15 +363,11 @@ class SlideshowActivity : AppCompatActivity() {
         if (prefs.presenceEnabled) PRESENCE_TICK_MS else SLEEP_TICK_MS
 
     private fun startPresenceIfEnabled() {
-        if (prefs.presenceEnabled) {
-            // Order matters: the process must be foreground before the camera is opened,
-            // or Android 9 refuses the connection outright.
-            PresenceService.start(this)
-            presence.start()
-        } else {
-            presence.stop()
-            PresenceService.stop(this)
-        }
+        // The service starts the detector itself, after foregrounding the process —
+        // order matters, because Android 9 refuses a camera connection to a background
+        // process. Starting it here too would open the camera before that guarantee
+        // holds.
+        if (prefs.presenceEnabled) PresenceService.start(this) else PresenceService.stop(this)
     }
 
     private fun enterSleep() {
@@ -410,6 +420,22 @@ class SlideshowActivity : AppCompatActivity() {
         // re-adding KEEP_SCREEN_ON below only prevents a screen from sleeping, it cannot
         // turn a dark one back on. No-op when the screen is already lit.
         WakeAlarm.powerScreenOn(this)
+
+        // Cycling the panel hands the foreground to Portal's launcher, so waking up
+        // while invisible is the normal case, not an edge case: the frame would render
+        // correctly into a view hierarchy nobody can see. PresenceService also does this
+        // on its tick; doing it here too makes waking feel immediate rather than taking
+        // up to three seconds.
+        if (!isInForeground) {
+            runCatching {
+                startActivity(
+                    Intent(this, SlideshowActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    )
+                )
+            }.onFailure { Log.w(TAG, "could not bring the frame forward: ${it.message}") }
+        }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.attributes = window.attributes.apply {
@@ -742,6 +768,8 @@ class SlideshowActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        isInForeground = false
+        AppForeground.onActivityPaused()
         handler.removeCallbacks(advanceRunnable)
         handler.removeCallbacks(watchdogRunnable)
         // The sleep tick deliberately keeps running. Cancelling it here was the bug that
@@ -752,6 +780,8 @@ class SlideshowActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isInForeground = true
+        AppForeground.onActivityResumed()
         // Remove before posting: the tick is no longer cancelled in onPause, so a bare
         // post() here would stack another loop on every resume.
         handler.removeCallbacks(sleepTickRunnable)
@@ -766,10 +796,11 @@ class SlideshowActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isInForeground = false
         handler.removeCallbacksAndMessages(null)
         stopVideo()
-        // Release the camera. It is bound to the detector's own lifecycle, not this
-        // Activity's, so nothing else would ever let it go.
-        presence.stop()
+        // Deliberately NOT presence.stop(). The detector belongs to PresenceService and
+        // has to keep running after this Activity dies — stopping it here is what left
+        // the frame unable to notice anyone once Portal's launcher took the foreground.
     }
 }

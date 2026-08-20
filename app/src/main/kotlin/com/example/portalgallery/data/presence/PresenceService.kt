@@ -7,27 +7,33 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import com.example.portalgallery.R
+import com.example.portalgallery.prefs.AppPreferences
 
 /**
- * Holds the app in the foreground so presence detection survives the screen going off.
+ * Owns presence detection, and brings the frame back to the foreground when someone
+ * arrives.
  *
- * **Why this has to exist.** Android 9 disconnects the camera from any app whose process
- * has no foreground activity and no foreground service. When the frame sleeps, the panel
- * powers down, the Activity is stopped, the process drops to the background, and the
- * system revokes camera access — so nothing can notice someone walking in, and the frame
- * can never wake itself. Sleeping worked; waking could not.
+ * **Why the service owns this.** Two separate failures made an Activity-owned detector
+ * unworkable on Portal:
  *
- * The service deliberately does nothing else. It does not own the camera or the
- * detector; those stay in the Activity's process, and process-level foreground state is
- * what the restriction actually keys on. A do-nothing service is far less invasive than
- * moving the whole detection pipeline across a service boundary.
+ *  1. Android 9 disconnects the camera from any process with no foreground activity and
+ *     no foreground service. Once the panel powers off, the Activity stops and the
+ *     system revokes camera access — so the frame could detect absence but never
+ *     presence.
+ *  2. Even with the camera alive, cycling the panel hands the foreground to Portal's
+ *     launcher. The Activity kept running and kept waking the screen, but the user saw
+ *     the Portal home screen: presence woke the *device* and not the *gallery*.
  *
- * The notification is unavoidable — that is the deal Android makes for foreground
- * status. It is set to minimum importance so it sits silently in the shade rather than
- * appearing on the frame.
+ * So this service holds the process foreground, owns the detector so detection survives
+ * the Activity being destroyed, and relaunches the frame when presence returns.
+ *
+ * The notification is the price Android charges for foreground status. Minimum
+ * importance, so it stays silent and collapsed in the shade.
  */
 class PresenceService : Service() {
 
@@ -35,6 +41,13 @@ class PresenceService : Service() {
         private const val TAG = "PortalGallery"
         private const val CHANNEL_ID = "presence"
         private const val NOTIFICATION_ID = 1
+
+        /** Matches the frame's own presence tick; fast enough that walking up to the
+         *  frame feels immediate rather than laggy. */
+        private const val TICK_MS = 3_000L
+
+        /** Don't hammer startActivity while someone stands in front of the frame. */
+        private const val RELAUNCH_COOLDOWN_MS = 10_000L
 
         fun start(context: Context) {
             runCatching {
@@ -49,23 +62,95 @@ class PresenceService : Service() {
         }
     }
 
+    private lateinit var prefs: AppPreferences
+    private lateinit var detector: PresenceDetector
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastRelaunchMs = 0L
+
+    private val tick = object : Runnable {
+        override fun run() {
+            runCatching { evaluate() }
+                .onFailure { Log.w(TAG, "presence tick failed: ${it.message}") }
+            handler.postDelayed(this, TICK_MS)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        prefs = AppPreferences(this)
+        detector = PresenceDetector.get(this)
+
         createChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         Log.i(TAG, "presence service foregrounded — camera will survive screen-off")
+
+        detector.start()
+        handler.post(tick)
+    }
+
+    /**
+     * If someone is in view and the frame is not on screen, put it back on screen.
+     *
+     * This is the fix for "presence woke the Portal but not the gallery". It covers both
+     * shapes of the problem: an Activity that is alive but behind Portal's launcher
+     * (reordered to front) and an Activity that no longer exists (launched fresh).
+     */
+    private fun evaluate() {
+        if (!prefs.presenceEnabled) return
+        if (detector.status != PresenceDetector.Status.RUNNING) {
+            detector.recoverIfStopped()
+            return
+        }
+
+        val idleMs = System.currentTimeMillis() - detector.referenceMs
+        val present = idleMs < prefs.absenceTimeoutMinutes * 60_000L
+        if (!present) return
+
+        // Process-wide, not slideshow-specific: otherwise opening settings reads as
+        // "the app is gone" and this would relaunch the slideshow over the top of it.
+        // getRunningTasks is restricted and unreliable, so the activities report in.
+        if (com.example.portalgallery.ui.AppForeground.isVisible) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastRelaunchMs < RELAUNCH_COOLDOWN_MS) return
+        lastRelaunchMs = now
+
+        Log.i(TAG, "someone in view but the frame is not on screen — bringing it forward")
+
+        // Power the panel first. Bringing an Activity forward does not turn a dark
+        // screen on, and the two together are what "wake on presence" actually means.
+        com.example.portalgallery.data.schedule.WakeAlarm.powerScreenOn(this)
+
+        val launch = Intent().apply {
+            setClassName(
+                this@PresenceService,
+                "com.example.portalgallery.ui.slideshow.SlideshowActivity",
+            )
+            // API 28 predates the Android 10 background-activity-start restriction, so
+            // a service may do this. REORDER_TO_FRONT handles the common case where the
+            // Activity is alive behind the launcher; NEW_TASK covers a cold start.
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
+        }
+        runCatching { startActivity(launch) }
+            .onFailure { Log.e(TAG, "could not bring the frame forward: ${it.message}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // START_STICKY: if the process is killed, bring the service back, which restores
-        // camera access for whatever is left of the app.
+        // both camera access and the relaunch watchdog.
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
+        detector.stop()
         Log.i(TAG, "presence service stopped")
     }
 
@@ -74,9 +159,8 @@ class PresenceService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             getString(R.string.presence_channel_name),
-            // MIN, not LOW: no sound, no badge, collapsed in the shade. This is
-            // bookkeeping the user did not ask for, so it should be as quiet as the
-            // platform permits.
+            // MIN: no sound, no badge, collapsed. This is bookkeeping the user did not
+            // ask for, so it should be as quiet as the platform permits.
             NotificationManager.IMPORTANCE_MIN,
         ).apply {
             description = getString(R.string.presence_channel_desc)
