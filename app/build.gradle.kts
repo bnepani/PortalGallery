@@ -47,6 +47,14 @@ android {
         // Overridable per device at runtime over adb regardless; see README.
         buildConfigField("String", "DEFAULT_ALBUM_URL", "\"$defaultAlbumUrl\"")
 
+        // TFLite ships native libraries for four ABIs — 41MB of a 52MB APK. Portal
+        // reports arm64-v8a and supports only arm64-v8a/armeabi-v7a, so the x86 pair is
+        // 24MB that can never execute on this hardware. The arm64 emulator is covered
+        // too; an x86 emulator would not be.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
         // (HTTP_LOGGING removed — it was added for the OkHttp logging interceptor that
         // went away with the Photos API client, and nothing referenced it.)
     }
