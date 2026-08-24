@@ -38,11 +38,25 @@ ordering. Ordering matters — see *Known limits* below.
 **Per device, no rebuild** (the usual way):
 
 ```bash
-adb shell am start -n com.example.portalgallery/.ui.slideshow.SlideshowActivity \
-  -e album_url "https://photos.app.goo.gl/YOURLINK"
+A=com.example.portalgallery/.ui.slideshow.SlideshowActivity
+
+# Replace the configured set with one album
+adb shell am start -n $A -e album_url "https://photos.app.goo.gl/YOURLINK"
+
+# Or several at once, up to 5
+adb shell am start -n $A -e album_url "https://photos.app.goo.gl/AAA,https://photos.app.goo.gl/BBB"
+
+# Add one without re-typing the others
+adb shell am start -n $A -e album_add "https://photos.app.goo.gl/CCC"
+
+# Remove one
+adb shell am start -n $A -e album_remove "https://photos.app.goo.gl/CCC"
 ```
 
 Persists to `SharedPreferences` and takes precedence over the built-in default.
+
+Invalid, duplicate, and over-the-limit entries are rejected individually with a reason
+in logcat — the valid ones in the same list still apply.
 
 **Change the built-in default** (survives `pm clear`, applies to fresh installs): add it
 to `local.properties`, which is gitignored — a share link is effectively a capability and
@@ -71,10 +85,25 @@ adb shell run-as com.example.portalgallery \
 ### What happens next
 
 The frame keeps showing the old photos until the new album syncs — it never blanks
-during a switch. After the first successful sync, photos not in the new album are
-deleted automatically, so albums do not accumulate on disk.
+during a switch. After a **fully successful** sync, photos belonging to no configured
+album are deleted, so albums do not accumulate on disk.
 
 Resolution order: **SharedPreferences → `BuildConfig.DEFAULT_ALBUM_URL` → nothing**.
+
+### Multiple albums (up to 5)
+
+Items from every album are pooled and shuffled together; duplicates shared between
+albums are stored once, since media ids are globally unique.
+
+**One unreachable album never costs you its photos.** Each album is fetched
+independently, and pruning only runs when *every* album was read successfully. Otherwise
+the frame carries forward everything already on disk — because "not in any album I could
+read" and "not in any album" are very different claims, and acting on the first would
+delete a fifth of the library over a single failed HTTP request, silently, while every
+other album kept working.
+
+The 5-album cap is a deliberate ceiling: each album contributes up to ~300 items, so five
+is already ~1500 photos and several hundred megabytes once videos are enabled.
 
 ---
 

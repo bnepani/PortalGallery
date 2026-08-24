@@ -24,6 +24,7 @@ import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.target.Target
 import com.example.portalgallery.BuildConfig
 import com.example.portalgallery.R
+import com.example.portalgallery.data.album.AlbumList
 import com.example.portalgallery.data.presence.PresenceDetector
 import com.example.portalgallery.data.presence.PresenceService
 import com.example.portalgallery.data.schedule.AwakePolicy
@@ -55,6 +56,8 @@ class SlideshowActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "PortalGallery"
         const val EXTRA_ALBUM_URL = "album_url"
+        const val EXTRA_ALBUM_ADD = "album_add"
+        const val EXTRA_ALBUM_REMOVE = "album_remove"
         const val EXTRA_SLEEP = "sleep"
         const val EXTRA_SLEEP_START = "sleep_start"
         const val EXTRA_SLEEP_END = "sleep_end"
@@ -174,9 +177,33 @@ class SlideshowActivity : AppCompatActivity() {
     private fun applyConfigIntent(source: Intent?) {
         val i = source ?: return
 
-        i.getStringExtra(EXTRA_ALBUM_URL)?.takeIf { it.isNotBlank() }?.let {
-            Log.i(TAG, "album url set via intent")
-            prefs.albumUrl = it
+        // Accepts one link or several (newline- or comma-separated), replacing the
+        // configured set. `album_add` appends instead, so a new album can be added
+        // without re-typing the others.
+        i.getStringExtra(EXTRA_ALBUM_URL)?.takeIf { it.isNotBlank() }?.let { raw ->
+            val parsed = AlbumList.parse(raw)
+            parsed.rejected.forEach { (url, why) -> Log.w(TAG, "album rejected: $url — $why") }
+            if (parsed.urls.isEmpty()) {
+                Log.e(TAG, "album_url had no usable links — keeping the existing set")
+            } else {
+                prefs.albumUrls = parsed.urls
+                Log.i(TAG, "albums set via intent: ${parsed.urls.size}")
+            }
+        }
+
+        i.getStringExtra(EXTRA_ALBUM_ADD)?.takeIf { it.isNotBlank() }?.let { raw ->
+            val merged = AlbumList.parse(
+                AlbumList.serialise(prefs.albumUrls) + AlbumList.DELIMITER + raw
+            )
+            merged.rejected.forEach { (url, why) -> Log.w(TAG, "album rejected: $url — $why") }
+            prefs.albumUrls = merged.urls
+            Log.i(TAG, "albums after add: ${merged.urls.size}")
+        }
+
+        i.getStringExtra(EXTRA_ALBUM_REMOVE)?.takeIf { it.isNotBlank() }?.let { raw ->
+            val drop = AlbumList.parse(raw).urls.toSet() + raw.trim()
+            prefs.albumUrls = prefs.albumUrls.filterNot { it in drop }
+            Log.i(TAG, "albums after remove: ${prefs.albumUrls.size}")
         }
 
         i.getStringExtra(EXTRA_SLEEP)?.lowercase()?.let {
@@ -226,7 +253,7 @@ class SlideshowActivity : AppCompatActivity() {
                 handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
             } else {
                 binding.tvStatus.setText(
-                    if (albumUrl().isNullOrBlank()) R.string.status_no_album
+                    if (albumUrls().isEmpty()) R.string.status_no_album
                     else R.string.status_first_sync
                 )
                 binding.tvStatus.visibility = View.VISIBLE
@@ -236,22 +263,24 @@ class SlideshowActivity : AppCompatActivity() {
         }
     }
 
-    private fun albumUrl(): String? =
-        prefs.albumUrl?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.DEFAULT_ALBUM_URL.takeIf { it.isNotBlank() }
+    /** Configured albums, falling back to the build-time default. */
+    private fun albumUrls(): List<String> =
+        prefs.albumUrls.takeIf { it.isNotEmpty() }
+            ?: AlbumList.parse(BuildConfig.DEFAULT_ALBUM_URL).urls
 
     private suspend fun refreshLoop() {
-        val url = albumUrl()
-        if (url.isNullOrBlank()) {
-            Log.w(TAG, "no album url configured — not syncing")
+        val urls = albumUrls()
+        if (urls.isEmpty()) {
+            Log.w(TAG, "no album configured — not syncing")
             return
         }
+        Log.i(TAG, "syncing ${urls.size} album(s)")
         val sync = AlbumSync(store)
         val metrics = resources.displayMetrics
 
         while (lifecycleScope.isActive) {
             val result = sync.sync(
-                url,
+                albumUrls(),
                 metrics.widthPixels,
                 metrics.heightPixels,
                 includeVideos = prefs.videoEnabled,
@@ -264,9 +293,18 @@ class SlideshowActivity : AppCompatActivity() {
 
             when (result) {
                 is AlbumSync.Result.Success -> {
-                    prefs.lastSyncSummary = "${result.total} photos, ${result.bytes / 1_048_576}MB" +
-                        if (result.degraded) " (DEGRADED PARSE)" else ""
-                    Log.i(TAG, "sync ok: ${prefs.lastSyncSummary}, complete=${result.isCompleteAlbum}")
+                    val failed = result.albums.count { !it.ok }
+                    prefs.lastSyncSummary = buildString {
+                        append("${result.total} items, ${result.bytes / 1_048_576}MB")
+                        append(" from ${result.albums.count { it.ok }}/${result.albums.size} albums")
+                        if (failed > 0) append(" — $failed unreachable, photos kept")
+                        if (result.degraded) append(" (DEGRADED PARSE)")
+                    }
+                    Log.i(TAG, "sync ok: ${prefs.lastSyncSummary}")
+                    result.albums.forEach {
+                        Log.i(TAG, "  ${AlbumList.shortName(it.url)}: " +
+                            (it.error ?: "${it.items} items${if (it.truncated) " (truncated)" else ""}"))
+                    }
                     onLibraryChanged()
                 }
                 is AlbumSync.Result.Failure -> {

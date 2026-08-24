@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.portalgallery.BuildConfig
 import com.example.portalgallery.R
+import com.example.portalgallery.data.album.AlbumList
 import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.store.PhotoStore
 import com.example.portalgallery.databinding.ActivitySettingsBinding
@@ -252,9 +253,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun showAlbumStatus() {
-        val url = prefs.albumUrl?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.DEFAULT_ALBUM_URL.takeIf { it.isNotBlank() }
-            ?: "(none configured)"
+        val urls = prefs.albumUrls.takeIf { it.isNotEmpty() }
+            ?: AlbumList.parse(BuildConfig.DEFAULT_ALBUM_URL).urls
+        val url = if (urls.isEmpty()) "(none configured)"
+        else urls.mapIndexed { i, u -> "${i + 1}. $u" }.joinToString("\n")
 
         val onDisk = PhotoStore(this).load()
         val portrait = onDisk.count { it.isPortrait }

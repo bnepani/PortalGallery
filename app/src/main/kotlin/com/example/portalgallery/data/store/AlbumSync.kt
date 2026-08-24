@@ -2,6 +2,7 @@ package com.example.portalgallery.data.store
 
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.example.portalgallery.data.album.AlbumList
 import com.example.portalgallery.data.album.AlbumUrl
 import com.example.portalgallery.data.album.SharedAlbumParser
 import kotlinx.coroutines.Dispatchers
@@ -43,22 +44,35 @@ class AlbumSync(private val store: PhotoStore) {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    /** Per-album outcome, so the settings screen can say which album failed and why. */
+    data class AlbumOutcome(
+        val url: String,
+        val title: String?,
+        val items: Int,
+        val error: String?,
+        val degraded: Boolean = false,
+        val truncated: Boolean = false,
+    ) {
+        val ok: Boolean get() = error == null
+    }
+
     sealed class Result {
         data class Success(
+            val albums: List<AlbumOutcome>,
             val total: Int,
             val added: Int,
             val pruned: Int,
             val bytes: Long,
-            val degraded: Boolean,
-            val albumTitle: String?,
-            val isCompleteAlbum: Boolean,
-        ) : Result()
+        ) : Result() {
+            val degraded: Boolean get() = albums.any { it.degraded }
+            val partial: Boolean get() = albums.any { !it.ok }
+        }
 
         data class Failure(val reason: String) : Result()
     }
 
     suspend fun sync(
-        albumUrl: String,
+        albumUrls: List<String>,
         targetW: Int,
         targetH: Int,
         includeVideos: Boolean = true,
@@ -66,40 +80,42 @@ class AlbumSync(private val store: PhotoStore) {
     ): Result = withContext(Dispatchers.IO) {
         val existing = store.load()
 
-        AlbumUrl.problem(albumUrl)?.let { return@withContext Result.Failure(it) }
-
-        val fetched = runCatching { fetch(albumUrl) }.getOrElse {
-            return@withContext Result.Failure("fetch failed: ${it.message}")
+        if (albumUrls.isEmpty()) {
+            return@withContext Result.Failure("no album configured")
         }
 
-        // Judge by where the request landed, not by page content: a valid share page
-        // shows anonymous visitors a "Sign in" button, so its markup mentions sign-in.
-        if (AlbumUrl.isSignInRedirect(fetched.finalUrl)) {
+        // Each album is fetched independently: one unreachable album must not stop the
+        // others from refreshing.
+        val fetches = albumUrls.map { url -> fetchAlbum(url) }
+        val outcomes = fetches.map { it.first }
+
+        if (outcomes.none { it.ok }) {
             return@withContext Result.Failure(
-                "album is not publicly shared — Google redirected to sign-in. " +
-                    "Use Share > Create link to get a photos.app.goo.gl link."
+                "all ${outcomes.size} album(s) failed — " +
+                    outcomes.joinToString("; ") { "${AlbumList.shortName(it.url)}: ${it.error}" }
             )
         }
-        val html = fetched.body
-
-        val parsed = runCatching { SharedAlbumParser.parse(html) }.getOrElse {
-            return@withContext Result.Failure("parse failed: ${it.message}")
+        outcomes.filter { !it.ok }.forEach {
+            Log.e(TAG, "album ${AlbumList.shortName(it.url)} failed: ${it.error} — keeping its photos")
         }
 
-        if (parsed.tier == SharedAlbumParser.Tier.REGEX) {
-            // Not fatal, but it means the structured payload moved. Surface it loudly:
-            // silent degradation is the failure mode this whole design guards against.
-            Log.w(TAG, "PARSER DEGRADED to regex tier — page structure changed")
+        // Union across albums. Ids are globally unique, so an item that appears in two
+        // albums is stored once rather than twice.
+        val wanted = LinkedHashMap<String, SharedAlbumParser.Photo>()
+        fetches.filter { it.first.ok }.forEach { (_, photos) ->
+            photos.forEach { photo ->
+                wanted[photo.id ?: photo.baseUrl.substringAfterLast("/pw/")] = photo
+            }
         }
 
-        // Count gate. Only meaningful when we already had photos.
-        if (existing.isNotEmpty() && parsed.photos.size < existing.size * SHRINK_ALARM) {
+        // Count gate, applied to the union. Only meaningful when every album was read —
+        // a partial sync legitimately sees fewer items than are on disk.
+        val allOk = outcomes.all { it.ok }
+        if (allOk && existing.isNotEmpty() && wanted.size < existing.size * SHRINK_ALARM) {
             return@withContext Result.Failure(
-                "suspicious shrink: ${parsed.photos.size} vs ${existing.size} — keeping existing"
+                "suspicious shrink: ${wanted.size} vs ${existing.size} — keeping existing"
             )
         }
-
-        val wanted = parsed.photos.associateBy { it.id ?: it.baseUrl.substringAfterLast("/pw/") }
         val missing = wanted.filterKeys { !store.hasPhoto(it) }
         Log.i(TAG, "sync: ${wanted.size} in album, ${missing.size} to download")
 
@@ -157,24 +173,89 @@ class AlbumSync(private val store: PhotoStore) {
         // Index only what is actually on disk. A photo that failed to download simply
         // is not listed; it will be retried on the next sync.
         val present = wanted.filterKeys { store.hasPhoto(it) }
-        if (present.isEmpty()) {
+
+        // **The multi-album hazard.** `wanted` only contains items from albums that were
+        // read successfully. If one of five albums is unreachable, indexing and pruning
+        // against `wanted` alone would drop its photos from the frame and then delete
+        // them from disk — losing a third of the library to one failed HTTP request, and
+        // silently, because every other album still works.
+        //
+        // So when any album failed, everything already on disk is carried forward
+        // untouched. Nothing is deleted until every album has been read and we actually
+        // know what belongs.
+        val carried = if (allOk) {
+            emptyList()
+        } else {
+            existing.filter { it.id !in present.keys }
+                .also { Log.i(TAG, "carrying forward ${it.size} items from unread album(s)") }
+        }
+
+        if (present.isEmpty() && carried.isEmpty()) {
             return@withContext Result.Failure("nothing on disk after sync — keeping existing")
         }
 
-        store.saveIndex(present.map { (id, p) ->
+        val entries = present.map { (id, p) ->
             PhotoStore.Entry(id, p.width ?: targetW, p.height ?: targetH, p.isVideo)
-        })
-        val pruned = store.prune(present.keys)
+        } + carried.map {
+            PhotoStore.Entry(it.id, it.width, it.height, it.isVideo)
+        }
+        store.saveIndex(entries)
+
+        val pruned = if (allOk) store.prune(entries.map { it.id }.toSet()) else 0
 
         Result.Success(
-            total = present.size,
+            albums = outcomes,
+            total = entries.size,
             added = missing.size - failures.coerceAtMost(missing.size),
             pruned = pruned,
             bytes = store.totalBytes(),
-            degraded = parsed.tier == SharedAlbumParser.Tier.REGEX,
-            albumTitle = parsed.albumTitle,
-            isCompleteAlbum = parsed.isCompleteAlbum,
         )
+    }
+
+    /**
+     * Fetches and parses one album. Never throws — a failure is reported as an outcome
+     * so the other albums still sync and this album's photos are preserved.
+     */
+    private fun fetchAlbum(url: String): Pair<AlbumOutcome, List<SharedAlbumParser.Photo>> {
+        fun fail(reason: String) =
+            AlbumOutcome(url, null, 0, reason) to emptyList<SharedAlbumParser.Photo>()
+
+        AlbumUrl.problem(url)?.let { return fail(it) }
+
+        val fetched = runCatching { fetch(url) }.getOrElse {
+            return fail("fetch failed: ${it.message}")
+        }
+
+        // Judge by where the request landed, not by page content: a valid share page
+        // shows anonymous visitors a "Sign in" button, so its markup mentions sign-in.
+        if (AlbumUrl.isSignInRedirect(fetched.finalUrl)) {
+            return fail(
+                "not publicly shared — Google redirected to sign-in. " +
+                    "Use Share > Create link."
+            )
+        }
+
+        val parsed = runCatching { SharedAlbumParser.parse(fetched.body) }.getOrElse {
+            return fail("parse failed: ${it.message}")
+        }
+
+        val degraded = parsed.tier == SharedAlbumParser.Tier.REGEX
+        if (degraded) {
+            // Not fatal, but it means the structured payload moved. Surface it loudly:
+            // silent degradation is the failure mode this whole design guards against.
+            Log.w(TAG, "PARSER DEGRADED to regex tier for ${AlbumList.shortName(url)}")
+        }
+        Log.i(TAG, "album ${AlbumList.shortName(url)}: ${parsed.photos.size} items" +
+            if (parsed.isCompleteAlbum) "" else " (truncated at the page limit)")
+
+        return AlbumOutcome(
+            url = url,
+            title = parsed.albumTitle,
+            items = parsed.photos.size,
+            error = null,
+            degraded = degraded,
+            truncated = !parsed.isCompleteAlbum,
+        ) to parsed.photos
     }
 
     private data class Fetched(val finalUrl: String, val body: String)

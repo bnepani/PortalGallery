@@ -44,6 +44,11 @@ android {
         //
         //   local.properties:  portalgallery.albumUrl=https://photos.app.goo.gl/XXXX
         //
+        // Several albums: comma-separate them (up to 5). Commas, not newlines — the
+        // value is interpolated into a Kotlin string literal here, and a newline would
+        // break the generated BuildConfig.
+        //   portalgallery.albumUrl=https://photos.app.goo.gl/AAA,https://photos.app.goo.gl/BBB
+        //
         // Overridable per device at runtime over adb regardless; see README.
         buildConfigField("String", "DEFAULT_ALBUM_URL", "\"$defaultAlbumUrl\"")
 

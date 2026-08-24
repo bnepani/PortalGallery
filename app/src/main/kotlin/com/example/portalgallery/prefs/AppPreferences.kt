@@ -2,6 +2,7 @@ package com.example.portalgallery.prefs
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.portalgallery.data.album.AlbumList
 
 class AppPreferences(context: Context) {
 
@@ -28,9 +29,29 @@ class AppPreferences(context: Context) {
         get() = prefs.getInt(KEY_SLIDESHOW_INTERVAL, 8)
         set(value) = prefs.edit().putInt(KEY_SLIDESHOW_INTERVAL, value).apply()
 
-    var albumUrl: String?
-        get() = prefs.getString(KEY_ALBUM_URL, null)
-        set(value) = prefs.edit().putString(KEY_ALBUM_URL, value).apply()
+    /**
+     * Configured albums, in order, capped by [AlbumList.MAX_ALBUMS].
+     *
+     * Reading migrates the old single-album key on first access, so an existing install
+     * keeps its album across the upgrade instead of silently emptying.
+     */
+    var albumUrls: List<String>
+        get() {
+            prefs.getString(KEY_ALBUM_URLS, null)?.let { return AlbumList.parse(it).urls }
+            val legacy = prefs.getString(KEY_ALBUM_URL, null)
+            if (!legacy.isNullOrBlank()) {
+                val migrated = AlbumList.parse(legacy).urls
+                prefs.edit()
+                    .putString(KEY_ALBUM_URLS, AlbumList.serialise(migrated))
+                    .remove(KEY_ALBUM_URL)
+                    .apply()
+                return migrated
+            }
+            return emptyList()
+        }
+        set(value) = prefs.edit()
+            .putString(KEY_ALBUM_URLS, AlbumList.serialise(value.take(AlbumList.MAX_ALBUMS)))
+            .apply()
 
     /** Health signal. Must be paired with a render timestamp — a fresh sync on a dead
      *  frame reports healthy, which is exactly the lie this pair exists to prevent. */
@@ -121,7 +142,8 @@ class AppPreferences(context: Context) {
         private const val KEY_TOKEN_EXPIRY = "token_expiry"
         private const val KEY_SELECTED_ALBUMS = "selected_albums"
         private const val KEY_SLIDESHOW_INTERVAL = "slideshow_interval"
-        private const val KEY_ALBUM_URL = "album_url"
+        private const val KEY_ALBUM_URL = "album_url"       // legacy, migrated on read
+        private const val KEY_ALBUM_URLS = "album_urls"
         private const val KEY_LAST_SYNC = "last_sync_ms"
         private const val KEY_LAST_SYNC_SUMMARY = "last_sync_summary"
         private const val KEY_SLEEP_ENABLED = "sleep_enabled"
