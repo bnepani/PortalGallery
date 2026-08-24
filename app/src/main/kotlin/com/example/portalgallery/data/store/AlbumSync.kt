@@ -195,9 +195,9 @@ class AlbumSync(private val store: PhotoStore) {
         }
 
         val entries = present.map { (id, p) ->
-            PhotoStore.Entry(id, p.width ?: targetW, p.height ?: targetH, p.isVideo)
+            PhotoStore.Entry(id, p.width ?: targetW, p.height ?: targetH, p.isVideo, p.captureMs ?: 0L)
         } + carried.map {
-            PhotoStore.Entry(it.id, it.width, it.height, it.isVideo)
+            PhotoStore.Entry(it.id, it.width, it.height, it.isVideo, it.captureMs)
         }
         store.saveIndex(entries)
 

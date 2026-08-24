@@ -165,6 +165,28 @@
             android:valueFrom="0"
             android:valueTo="100" />
 
+        <!-- Day of week -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_weekday" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_weekday"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_weekday_enable"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/tv_weekday_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#999999"
+            android:textSize="18sp" />
+
         <!-- Presence -->
         <TextView
             style="@style/SettingsHeading"

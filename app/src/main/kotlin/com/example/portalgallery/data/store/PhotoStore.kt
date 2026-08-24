@@ -30,6 +30,13 @@ class PhotoStore(context: Context) {
         val height: Int,
         /** Defaults false so an index written before video support still deserialises. */
         val isVideo: Boolean = false,
+        /**
+         * Capture time, for the day-of-week filter. Defaults to 0 so an index written
+         * before this field existed still deserialises — PhotoSelector treats 0 as
+         * "always matches", so an upgrade cannot empty the frame before the next sync
+         * backfills real values.
+         */
+        val captureMs: Long = 0L,
     )
 
     data class StoredPhoto(
@@ -38,6 +45,7 @@ class PhotoStore(context: Context) {
         val width: Int,
         val height: Int,
         val isVideo: Boolean,
+        val captureMs: Long,
     ) {
         val isPortrait: Boolean get() = height > width
     }
@@ -58,7 +66,7 @@ class PhotoStore(context: Context) {
         entries.mapNotNull { e ->
             val f = fileFor(e.id, e.isVideo)
             if (f.exists() && f.length() > 0) {
-                StoredPhoto(e.id, f, e.width, e.height, e.isVideo)
+                StoredPhoto(e.id, f, e.width, e.height, e.isVideo, e.captureMs)
             } else {
                 null
             }

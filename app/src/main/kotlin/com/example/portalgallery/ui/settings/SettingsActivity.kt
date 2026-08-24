@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import com.example.portalgallery.BuildConfig
 import com.example.portalgallery.R
 import com.example.portalgallery.data.album.AlbumList
+import com.example.portalgallery.data.schedule.PhotoSelector
 import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.store.PhotoStore
 import com.example.portalgallery.databinding.ActivitySettingsBinding
@@ -18,7 +19,11 @@ import com.example.portalgallery.prefs.AppPreferences
 import com.example.portalgallery.ui.AppForeground
 import com.example.portalgallery.ui.slideshow.Transition
 import java.text.DateFormat
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.TextStyle
+import java.util.Locale
 import java.util.Date
 
 /**
@@ -48,6 +53,7 @@ class SettingsActivity : AppCompatActivity() {
         bindKenBurns()
         bindQuietHours()
         bindVideo()
+        bindWeekday()
         bindPresence()
         showAlbumStatus()
 
@@ -206,6 +212,43 @@ class SettingsActivity : AppCompatActivity() {
                 "$base\n\nSound plays only while someone is in view."
             else ->
                 "$base\n\nSound is off — clips play silently."
+        }
+    }
+
+    private fun bindWeekday() {
+        binding.swWeekday.isChecked = prefs.weekdayFilterEnabled
+        binding.swWeekday.setOnCheckedChangeListener { _, checked ->
+            prefs.weekdayFilterEnabled = checked
+            updateWeekdayStatus()
+        }
+        updateWeekdayStatus()
+    }
+
+    /**
+     * Shows what enabling this actually costs today, because the answer varies wildly:
+     * a library spread over years loses roughly six sevenths of itself, and a trip album
+     * shot over one weekend contributes nothing at all on a weekday.
+     */
+    private fun updateWeekdayStatus() {
+        val today = LocalDate.now().dayOfWeek
+        val dayName = today.getDisplayName(TextStyle.FULL, Locale.getDefault())
+        val library = PhotoStore(this).load()
+        val matching = PhotoSelector.countForToday(
+            library, today, ZoneId.systemDefault()
+        ) { it.captureMs }
+
+        val undated = library.count { it.captureMs <= 0L }
+
+        binding.tvWeekdayStatus.text = buildString {
+            append("Today is $dayName — $matching of ${library.size} items were taken on a $dayName.")
+            if (undated > 0) {
+                append("\n\n$undated items have no capture date yet and always show; ")
+                append("the next sync fills those in.")
+            }
+            if (prefs.weekdayFilterEnabled && matching == 0 && library.isNotEmpty()) {
+                append("\n\nNothing matches today, so the frame is showing everything ")
+                append("rather than going blank.")
+            }
         }
     }
 

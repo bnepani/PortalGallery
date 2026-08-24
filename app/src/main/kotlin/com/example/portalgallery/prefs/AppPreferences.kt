@@ -107,6 +107,16 @@ class AppPreferences(context: Context) {
         get() = prefs.getInt(KEY_VIDEO_VOLUME, 70)
         set(value) = prefs.edit().putInt(KEY_VIDEO_VOLUME, value).apply()
 
+    /**
+     * Show only photos taken on today's day of the week.
+     *
+     * Off by default: it can thin the rotation dramatically — roughly a seventh of the
+     * library, and nothing at all from an album shot over a single weekend.
+     */
+    var weekdayFilterEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WEEKDAY_FILTER, false)
+        set(value) = prefs.edit().putBoolean(KEY_WEEKDAY_FILTER, value).apply()
+
     /** Camera presence detection. Off by default — this turns on a camera in someone's
      *  living room and should be an explicit choice, never a surprise. */
     var presenceEnabled: Boolean
@@ -156,6 +166,7 @@ class AppPreferences(context: Context) {
         private const val KEY_VIDEO = "video_enabled"
         private const val KEY_VIDEO_AUDIO = "video_audio_enabled"
         private const val KEY_VIDEO_VOLUME = "video_volume"
+        private const val KEY_WEEKDAY_FILTER = "weekday_filter"
         private const val KEY_PRESENCE = "presence_enabled"
         private const val KEY_ABSENCE_TIMEOUT = "absence_timeout_min"
     }

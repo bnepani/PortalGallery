@@ -168,6 +168,38 @@ play silently and the settings screen says so rather than pretending sound is on
 
 ---
 
+## Day-of-the-week filter
+
+Off by default. Enable in on-device settings: the frame then shows only photos taken on
+the same weekday as today, so Mondays look like Mondays and weekends feel like weekends.
+
+**It relaxes rather than filters.** Both this and the orientation filter can legitimately
+match nothing — a landscape frame against a mostly-portrait album, or a Monday against a
+trip album shot over a single weekend. Together they are worse than either alone, roughly
+a seventh of 44%. So filters are dropped in order until something remains:
+
+1. weekday + orientation
+2. orientation only
+3. everything
+
+A frame showing nothing is the one outcome this design exists to prevent, so a strict
+intersection was never an option. `PhotoSelector` holds the cascade as pure logic with
+nine tests, including the invariant that a non-empty library never selects to empty.
+
+The settings screen reports what enabling it costs *today* — "23 of 300 items were taken
+on a Monday" — because the answer varies enormously between a library spread over years
+and one built from weekend trips.
+
+**Capture dates** come from the album page and are stored in the index. Items synced
+before this feature have none; those always match, so upgrading cannot empty the frame,
+and the next sync backfills them.
+
+Day-of-week is evaluated in the device's local zone, and the selection re-runs when the
+date rolls over — otherwise a frame left running would still be showing Tuesday's photos
+on Wednesday.
+
+---
+
 ## Presence detection
 
 Off by default. Enable in on-device settings; the frame then wakes when someone is in

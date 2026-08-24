@@ -24,6 +24,8 @@
     <string name="settings_video_explain">Clips download at original quality and can be much larger than photos — expect the library to grow considerably. Videos play in full before moving on.</string>
     <string name="settings_video_audio">Play sound (only when someone is in view)</string>
     <string name="settings_volume">Volume</string>
+    <string name="settings_weekday">Day of the week</string>
+    <string name="settings_weekday_enable">Show only photos taken on today\'s weekday</string>
     <string name="settings_presence">Presence detection</string>
     <string name="settings_presence_enable">Wake when someone is in the room</string>
     <string name="settings_presence_explain">Uses the camera to detect a person. Everything is processed on this device — no image is saved or sent anywhere. Closing the privacy shutter turns this off and the frame falls back to the quiet-hours schedule.</string>

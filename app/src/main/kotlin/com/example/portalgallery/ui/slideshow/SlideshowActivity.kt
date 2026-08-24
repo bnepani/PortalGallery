@@ -28,6 +28,7 @@ import com.example.portalgallery.data.album.AlbumList
 import com.example.portalgallery.data.presence.PresenceDetector
 import com.example.portalgallery.data.presence.PresenceService
 import com.example.portalgallery.data.schedule.AwakePolicy
+import com.example.portalgallery.data.schedule.PhotoSelector
 import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.schedule.WakeAlarm
 import com.example.portalgallery.data.store.AlbumSync
@@ -41,8 +42,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
 
 /**
  * The frame.
@@ -101,6 +104,9 @@ class SlideshowActivity : AppCompatActivity() {
 
     private var isAsleep = false
     private var lastScheduledAsleep: Boolean? = null
+
+    /** Date the current selection was made for; drives the midnight re-filter. */
+    private var lastFilterDay: LocalDate? = null
 
     /** Which ImageView currently holds the visible photo. Flips on every advance. */
     private var frontIsA = true
@@ -374,7 +380,32 @@ class SlideshowActivity : AppCompatActivity() {
      * presence enabled it needs to be responsive anyway, so the tick runs every few
      * seconds rather than every minute.
      */
+    /**
+     * Re-applies the filters when the date rolls over.
+     *
+     * Without this, a frame left running would keep showing Tuesday's photos on
+     * Wednesday — the weekday filter is only evaluated when the library changes, and on
+     * a wall-mounted device that can be days apart.
+     */
+    private fun checkDayRollover() {
+        if (!prefs.weekdayFilterEnabled) return
+        val today = LocalDate.now()
+        if (today == lastFilterDay) return
+
+        val previous = lastFilterDay
+        lastFilterDay = today
+        if (previous == null || library.isEmpty()) return
+
+        Log.i(TAG, "date rolled over to ${today.dayOfWeek} — re-selecting photos")
+        applyOrientationFilter(preserveId = photos.getOrNull(currentIndex)?.id)
+        if (photos.isNotEmpty() && !isAsleep) {
+            show(currentIndex)
+            scheduleNext()
+        }
+    }
+
     private fun evaluateSleepState() {
+        checkDayRollover()
         val scheduled = currentSchedule().isAsleepAt(LocalTime.now())
 
         // A manual "sleep now" lasts until the next scheduled transition, then normal
@@ -492,26 +523,34 @@ class SlideshowActivity : AppCompatActivity() {
     // --- orientation --------------------------------------------------------
 
     /**
-     * Narrows the library to photos matching the frame's physical orientation.
+     * Narrows the library by orientation and, optionally, by today's day of the week.
      *
-     * The one exception is an empty match: showing an ill-fitting photo is bad, showing
-     * nothing violates the invariant the whole design upholds, so the filter is
-     * abandoned rather than the frame going dark.
+     * The cascade lives in [PhotoSelector] so the empty-match cases are unit tested.
+     * Both filters can legitimately match nothing — a landscape frame against a mostly
+     * portrait album, or a Monday against a trip album shot over one weekend — so
+     * filters are dropped in order rather than allowed to blank the frame.
      */
     private fun applyOrientationFilter(preserveId: String? = null) {
         val wantPortrait =
             resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-        val matching = library.filter { it.isPortrait == wantPortrait }
 
-        photos = if (matching.isNotEmpty()) {
-            matching.shuffled()
-        } else {
-            if (library.isNotEmpty()) {
-                Log.w(TAG, "no ${if (wantPortrait) "portrait" else "landscape"} photos " +
-                    "in a library of ${library.size} — showing all rather than blanking")
-            }
-            library.shuffled()
+        val selection = PhotoSelector.select(
+            library = library,
+            wantPortrait = wantPortrait,
+            weekdayFilterEnabled = prefs.weekdayFilterEnabled,
+            today = LocalDate.now().dayOfWeek,
+            zone = ZoneId.systemDefault(),
+            isPortrait = { it.isPortrait },
+            captureMs = { it.captureMs },
+        )
+
+        if (selection.relaxed && library.isNotEmpty()) {
+            Log.w(TAG, "filters relaxed to ${selection.applied} — " +
+                "${selection.items.size} of ${library.size} in rotation")
         }
+
+        photos = selection.items.shuffled()
+        lastFilterDay = LocalDate.now()
         currentIndex = photos.indexOfFirst { it.id == preserveId }.takeIf { it >= 0 } ?: 0
     }
 
