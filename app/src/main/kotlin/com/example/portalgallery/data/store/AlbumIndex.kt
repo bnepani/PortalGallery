@@ -55,6 +55,26 @@ class AlbumIndex(private val root: File) {
         val album: String = "",
     ) {
         val isPortrait: Boolean get() = height > width
+
+        /**
+         * A loadable URL bounded to [w] x [h]. Fit-inside, not a crop.
+         *
+         * **Never load [baseUrl] directly.** Bare, it resolves to a 384x512 thumbnail —
+         * the size suffix is applied by the page's own JavaScript at render time and is
+         * absent from the data. This mirrors `SharedAlbumParser.Photo.url` for the same
+         * reason, and the resolution gate in AlbumSync exists because getting it wrong is
+         * otherwise invisible: the item count is unchanged.
+         */
+        fun url(w: Int, h: Int): String = "$baseUrl=w$w-h$h-no"
+
+        /**
+         * The MP4 itself.
+         *
+         * `=dv` returns a video for stills too — Google synthesises one from Motion
+         * Photos — so this suffix cannot be used to decide what is a video. That is what
+         * [isVideo] is for, and it comes from the structured payload.
+         */
+        fun videoUrl(): String = "$baseUrl=dv"
     }
 
     /**

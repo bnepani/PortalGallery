@@ -33,6 +33,7 @@ import com.example.portalgallery.data.schedule.CollageSelector
 import com.example.portalgallery.data.schedule.PhotoSelector
 import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.schedule.WakeAlarm
+import com.example.portalgallery.data.store.AlbumIndex
 import com.example.portalgallery.data.store.AlbumSync
 import com.example.portalgallery.data.store.PhotoStore
 import com.example.portalgallery.databinding.ActivitySlideshowBinding
@@ -368,7 +369,7 @@ class SlideshowActivity : AppCompatActivity() {
             return
         }
         Log.i(TAG, "syncing ${urls.size} album(s)")
-        val sync = AlbumSync(store)
+        val sync = AlbumSync(store, AlbumIndex(this))
         val metrics = resources.displayMetrics
 
         while (lifecycleScope.isActive) {
@@ -388,9 +389,14 @@ class SlideshowActivity : AppCompatActivity() {
                 is AlbumSync.Result.Success -> {
                     val failed = result.albums.count { !it.ok }
                     prefs.lastSyncSummary = buildString {
-                        append("${result.total} items, ${result.bytes / 1_048_576}MB")
+                        // Two numbers now, because they mean different things: what the
+                        // frame can display, and what the album is known to hold. The gap
+                        // between them is the point of Phase 2.
+                        append("${result.total} on disk of ${result.indexed} indexed")
+                        append(", ${result.bytes / 1_048_576}MB")
                         append(" from ${result.albums.count { it.ok }}/${result.albums.size} albums")
                         if (failed > 0) append(" — $failed unreachable, photos kept")
+                        if (result.albums.any { it.truncated }) append(" — crawl incomplete, nothing pruned")
                         if (result.degraded) append(" (DEGRADED PARSE)")
                     }
                     Log.i(TAG, "sync ok: ${prefs.lastSyncSummary}")

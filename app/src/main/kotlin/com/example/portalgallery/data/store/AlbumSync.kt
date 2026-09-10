@@ -3,8 +3,12 @@ package com.example.portalgallery.data.store
 import android.graphics.BitmapFactory
 import android.util.Log
 import com.example.portalgallery.data.album.AlbumList
+import com.example.portalgallery.data.album.AlbumPager
 import com.example.portalgallery.data.album.AlbumUrl
 import com.example.portalgallery.data.album.SharedAlbumParser
+import kotlinx.coroutines.delay
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -12,10 +16,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.time.ZoneId
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 
 /**
  * Refreshes the on-disk library from a Google Photos public share link.
@@ -23,8 +29,22 @@ import java.util.concurrent.atomic.AtomicInteger
  * The governing rule: **a failed sync must never reduce what is on disk.** Every exit
  * path other than a fully validated success leaves the existing photos and index
  * untouched, so the frame keeps showing the last good set indefinitely.
+ *
+ * Since Phase 2 this runs in three stages, and the separation matters:
+ *
+ *  1. **Crawl** every album to its end via [AlbumPager], building a complete picture of
+ *     what the album holds — ~20,000 items, against the 300 a single page returns.
+ *  2. **Judge** the crawl with [CrawlGuard], which decides whether it can be believed and
+ *     whether it has earned the right to delete anything.
+ *  3. **Download** the sample [ResidentSelector] chooses, and only then index and prune.
+ *
+ * Knowing about a photo and holding its bytes are now different things, which is what
+ * lets the frame draw on seven years of album while storing a few hundred megabytes.
  */
-class AlbumSync(private val store: PhotoStore) {
+class AlbumSync(
+    private val store: PhotoStore,
+    private val index: AlbumIndex,
+) {
 
     companion object {
         private const val TAG = "PortalGallery"
@@ -32,10 +52,36 @@ class AlbumSync(private val store: PhotoStore) {
         /** Below this, a "photo" is the 384x512 thumbnail you get from a bare URL. */
         private const val MIN_PLAUSIBLE_EDGE = 800
 
-        /** A parse returning less than this fraction of the previous set is suspect. */
-        private const val SHRINK_ALARM = 0.5
-
         private const val CONCURRENCY = 4
+
+        /**
+         * Hard ceiling on pages per album.
+         *
+         * The reference album needs 67. This exists so a server that hands back a fresh
+         * token forever cannot spin the crawl indefinitely — which is not hypothetical:
+         * putting the continuation token in the wrong argument slot produced exactly that,
+         * HTTP 200 and a new token on every call, while returning the same 300 photos.
+         * Hitting this cap means the crawl is incomplete, so it cannot prune.
+         */
+        private const val MAX_PAGES = 400
+
+        /** Pause between pages. Politeness, not a requirement — 67 pages at 1/s is ~70s. */
+        private const val PAGE_DELAY_MS = 1_000L
+
+        /** Attempts per page before a crawl gives up and reports itself incomplete. */
+        private const val PAGE_RETRIES = 3
+
+        /**
+         * How many of the newest photos are always kept on disk.
+         *
+         * Roughly what the frame held before Phase 2, so the upgrade cannot take away
+         * photographs that were already there, and the collage's reserved recency slot
+         * always has something recent to draw.
+         */
+        const val PIN_NEWEST = 300
+
+        /** Default sample size. ~1,500 x 301 KB measured mean is about 450 MB. */
+        const val DEFAULT_RESIDENT_TARGET = 1_500
 
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
@@ -62,7 +108,10 @@ class AlbumSync(private val store: PhotoStore) {
     sealed class Result {
         data class Success(
             val albums: List<AlbumOutcome>,
+            /** Items on disk and displayable. */
             val total: Int,
+            /** Items the album is known to hold, most of them not downloaded. */
+            val indexed: Int,
             val added: Int,
             val pruned: Int,
             val bytes: Long,
@@ -79,48 +128,80 @@ class AlbumSync(private val store: PhotoStore) {
         targetW: Int,
         targetH: Int,
         includeVideos: Boolean = true,
+        residentTarget: Int = DEFAULT_RESIDENT_TARGET,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): Result = withContext(Dispatchers.IO) {
         val existing = store.load()
+        val previous = index.load()
 
         if (albumUrls.isEmpty()) {
             return@withContext Result.Failure("no album configured")
         }
 
-        // Each album is fetched independently: one unreachable album must not stop the
+        // Each album is crawled independently: one unreachable album must not stop the
         // others from refreshing.
-        val fetches = albumUrls.map { url -> fetchAlbum(url) }
-        val outcomes = fetches.map { it.first }
+        val crawls = albumUrls.map { url -> crawlAlbum(url) }
+        val outcomes = crawls.map { it.outcome }
 
-        if (outcomes.none { it.ok }) {
-            return@withContext Result.Failure(
-                "all ${outcomes.size} album(s) failed — " +
-                    outcomes.joinToString("; ") { "${AlbumList.shortName(it.url)}: ${it.error}" }
-            )
-        }
         outcomes.filter { !it.ok }.forEach {
             Log.e(TAG, "album ${AlbumList.shortName(it.url)} failed: ${it.error} — keeping its photos")
         }
 
         // Union across albums. Ids are globally unique, so an item that appears in two
         // albums is stored once rather than twice.
-        val wanted = LinkedHashMap<String, SharedAlbumParser.Photo>()
-        fetches.filter { it.first.ok }.forEach { (_, photos) ->
-            photos.forEach { photo ->
-                wanted[photo.id ?: photo.baseUrl.substringAfterLast("/pw/")] = photo
+        val union = LinkedHashMap<String, AlbumIndex.Entry>()
+        crawls.filter { it.outcome.ok }.forEach { crawl ->
+            crawl.entries.forEach { union[it.id] = it }
+        }
+
+        // Everything about whether this crawl may be believed, and whether it has earned
+        // the right to delete anything, lives in CrawlGuard — pure, and tested against the
+        // exact scenario three design reviews named as the likeliest way this fails.
+        val verdict = CrawlGuard.evaluate(
+            previous = previous,
+            outcomes = crawls.map { it.guard },
+            newSize = union.size,
+        )
+        val mayPrune = when (verdict) {
+            is CrawlGuard.Verdict.Reject -> {
+                Log.e(TAG, "crawl rejected: ${verdict.reason}")
+                return@withContext Result.Failure(verdict.reason)
+            }
+            is CrawlGuard.Verdict.Accept -> {
+                Log.i(TAG, "crawl accepted (prune=${verdict.mayPrune}): ${verdict.reason}")
+                verdict.mayPrune
             }
         }
 
-        // Count gate, applied to the union. Only meaningful when every album was read —
-        // a partial sync legitimately sees fewer items than are on disk.
-        val allOk = outcomes.all { it.ok }
-        if (allOk && existing.isNotEmpty() && wanted.size < existing.size * SHRINK_ALARM) {
-            return@withContext Result.Failure(
-                "suspicious shrink: ${wanted.size} vs ${existing.size} — keeping existing"
-            )
+        // An incomplete crawl is merged rather than discarded — a deliberate departure
+        // from §5.4, which said discard. Add-only merging protects exactly as well, since
+        // the guard has already forbidden pruning, and it is strictly more useful: an
+        // album that reliably times out at page 40 would otherwise never contribute a new
+        // photograph again. Previous entries the crawl did not reach are carried forward.
+        val merged = LinkedHashMap<String, AlbumIndex.Entry>()
+        if (!mayPrune) previous?.items?.forEach { merged[it.id] = it }
+        merged.putAll(union)
+        if (!mayPrune && previous != null) {
+            Log.i(TAG, "carried ${merged.size - union.size} item(s) forward from the previous index")
         }
+
+        // Which of those to actually hold bytes for. Videos are excluded when disabled
+        // before sampling rather than after, so turning video off does not silently spend
+        // part of the sample on items that will never be downloaded.
+        val eligible = merged.values.filter { includeVideos || !it.isVideo }
+        val resident = ResidentSelector.choose(
+            index = eligible,
+            target = residentTarget,
+            pinNewest = PIN_NEWEST,
+            zone = ZoneId.systemDefault(),
+            random = Random.Default,
+        )
+        val wanted = LinkedHashMap<String, AlbumIndex.Entry>()
+        resident.forEach { wanted[it.id] = it }
+
         val missing = wanted.filterKeys { !store.hasPhoto(it) }
-        Log.i(TAG, "sync: ${wanted.size} in album, ${missing.size} to download")
+        Log.i(TAG, "sync: ${merged.size} in album, ${resident.size} resident, " +
+            "${missing.size} to download")
 
         // Mutated from CONCURRENCY coroutines at once. `failures++` on a plain Int is a
         // read-modify-write, so counts would be lost and `added` would over-report.
@@ -216,24 +297,33 @@ class AlbumSync(private val store: PhotoStore) {
             return@withContext Result.Failure("resolution gate failed — refusing to index thumbnails")
         }
 
-        // Index only what is actually on disk. A photo that failed to download simply
-        // is not listed; it will be retried on the next sync.
+        // Prune BEFORE indexing, not after. Indexing first would list files that the
+        // prune then deletes, leaving the store index describing a library that no longer
+        // exists. PhotoStore.load() filters missing files so it would self-heal rather
+        // than crash — but a sync that reports a total it has just invalidated is the kind
+        // of small dishonesty that makes a later bug hard to read.
+        //
+        // Two generations of grace. A file leaves disk only once it has been outside the
+        // sample across two crawls — the renderer is holding a list handed to it earlier,
+        // on another thread, and this is what makes re-rolling safe without a handshake.
+        val keep = ResidentSelector.keepIds(resident, previous?.resident ?: emptyList())
+        val pruned = if (mayPrune) store.prune(keep) else 0
+        if (!mayPrune) {
+            Log.i(TAG, "not pruning: the crawl did not read every album to its end")
+        }
+
+        // Index only what is actually on disk, re-checked after the prune. A photo that
+        // failed to download simply is not listed; it will be retried on the next sync.
         val present = wanted.filterKeys { store.hasPhoto(it) }
 
-        // **The multi-album hazard.** `wanted` only contains items from albums that were
-        // read successfully. If one of five albums is unreachable, indexing and pruning
-        // against `wanted` alone would drop its photos from the frame and then delete
-        // them from disk — losing a third of the library to one failed HTTP request, and
-        // silently, because every other album still works.
-        //
-        // So when any album failed, everything already on disk is carried forward
-        // untouched. Nothing is deleted until every album has been read and we actually
-        // know what belongs.
-        val carried = if (allOk) {
-            emptyList()
-        } else {
-            existing.filter { it.id !in present.keys }
-                .also { Log.i(TAG, "carrying forward ${it.size} items from unread album(s)") }
+        // **The multi-album hazard, restated for a sampled library.** `wanted` holds only
+        // the sample drawn from albums that were read. Anything still on disk but outside
+        // it — an unread album's photos, or a photo the previous generation's grace is
+        // protecting — must stay in the index, because "not in this sample" and "not in
+        // the album" are entirely different claims and only one justifies deletion.
+        val carried = existing.filter { it.id !in present.keys && store.hasPhoto(it.id) }
+        if (carried.isNotEmpty()) {
+            Log.i(TAG, "carrying forward ${carried.size} item(s) already on disk")
         }
 
         if (present.isEmpty() && carried.isEmpty()) {
@@ -241,30 +331,67 @@ class AlbumSync(private val store: PhotoStore) {
         }
 
         val entries = present.map { (id, p) ->
-            PhotoStore.Entry(id, p.width ?: targetW, p.height ?: targetH, p.isVideo, p.captureMs ?: 0L)
+            PhotoStore.Entry(
+                id,
+                p.width.takeIf { it > 0 } ?: targetW,
+                p.height.takeIf { it > 0 } ?: targetH,
+                p.isVideo,
+                p.captureMs,
+            )
         } + carried.map {
             PhotoStore.Entry(it.id, it.width, it.height, it.isVideo, it.captureMs)
         }
         store.saveIndex(entries)
 
-        val pruned = if (allOk) store.prune(entries.map { it.id }.toSet()) else 0
+        // The index is written last, and only after the bytes and the store index are
+        // settled. Its `resident` list is what the next sync's grace period reads, so
+        // recording it before a failure could strand files with no generation to protect
+        // them.
+        index.save(
+            AlbumIndex.Snapshot(
+                crawledAtMs = System.currentTimeMillis(),
+                pageCount = crawls.sumOf { it.guard.pages },
+                complete = mayPrune,
+                items = merged.values.toList(),
+                resident = resident.map { it.id },
+            )
+        )
 
         Result.Success(
             albums = outcomes,
             total = entries.size,
+            indexed = merged.size,
             added = missing.size - failures.get(),
             pruned = pruned,
             bytes = store.totalBytes(),
         )
     }
 
+    /** One album's crawl: what it found, and what the guard needs to judge it. */
+    private data class Crawl(
+        val outcome: AlbumOutcome,
+        val guard: CrawlGuard.AlbumOutcome,
+        val entries: List<AlbumIndex.Entry>,
+    )
+
     /**
-     * Fetches and parses one album. Never throws — a failure is reported as an outcome
-     * so the other albums still sync and this album's photos are preserved.
+     * Reads one album to its end. Never throws — a failure is reported as an outcome so
+     * the other albums still sync and this album's photos are preserved.
+     *
+     * Page 1 comes from the share page's own embedded payload; the rest come from the
+     * `snAcKc` RPC that page declares. The reference album is 67 pages.
+     *
+     * **Completeness is only claimed when the pager runs out of tokens.** A crawl that
+     * gives up after retries, hits [MAX_PAGES], or cannot build a request is incomplete —
+     * and by [CrawlGuard]'s rule an incomplete crawl can add photos but never delete one.
+     * Everything it did read is still returned and still useful.
      */
-    private fun fetchAlbum(url: String): Pair<AlbumOutcome, List<SharedAlbumParser.Photo>> {
-        fun fail(reason: String) =
-            AlbumOutcome(url, null, 0, reason) to emptyList<SharedAlbumParser.Photo>()
+    private suspend fun crawlAlbum(url: String): Crawl {
+        fun fail(reason: String) = Crawl(
+            AlbumOutcome(url, null, 0, reason),
+            CrawlGuard.AlbumOutcome(AlbumList.shortName(url), 0, 0, complete = false, error = reason),
+            emptyList(),
+        )
 
         AlbumUrl.problem(url)?.let { return fail(it) }
 
@@ -291,18 +418,109 @@ class AlbumSync(private val store: PhotoStore) {
             // silent degradation is the failure mode this whole design guards against.
             Log.w(TAG, "PARSER DEGRADED to regex tier for ${AlbumList.shortName(url)}")
         }
-        Log.i(TAG, "album ${AlbumList.shortName(url)}: ${parsed.photos.size} items" +
-            if (parsed.isCompleteAlbum) "" else " (truncated at the page limit)")
 
-        return AlbumOutcome(
-            url = url,
-            title = parsed.albumTitle,
-            items = parsed.photos.size,
-            error = null,
-            degraded = degraded,
-            truncated = !parsed.isCompleteAlbum,
-        ) to parsed.photos
+        val short = AlbumList.shortName(url)
+        val items = LinkedHashMap<String, AlbumIndex.Entry>()
+        parsed.photos.forEach { p -> AlbumIndex.entryOf(p, url)?.let { items[it.id] = it } }
+
+        var pages = 1
+        var complete = parsed.isCompleteAlbum
+        var token = parsed.continuationToken
+
+        // The regex tier yields no ids and no token, so there is nothing to paginate from
+        // and nothing that could be keyed on disk. Degraded means degraded.
+        val endpoint = if (token == null || degraded) null else {
+            AlbumPager.parseEndpoint(fetched.body, pathOf(fetched.finalUrl))
+        }
+        if (token != null && endpoint == null) {
+            Log.w(TAG, "$short: page 1 has a continuation token but no usable RPC endpoint " +
+                "— stopping at ${items.size} items")
+        }
+
+        while (endpoint != null && token != null && pages < MAX_PAGES) {
+            val page = fetchPageWithRetries(endpoint, token, short, pages + 1)
+            if (page == null) {
+                Log.w(TAG, "$short: giving up after page $pages — crawl is incomplete, " +
+                    "nothing will be pruned")
+                complete = false
+                break
+            }
+            pages++
+            page.photos.forEach { p -> AlbumIndex.entryOf(p, url)?.let { items[it.id] = it } }
+            token = page.nextToken
+            complete = page.complete
+            if (token == null) break
+            delay(PAGE_DELAY_MS)
+        }
+
+        if (pages >= MAX_PAGES && token != null) {
+            Log.e(TAG, "$short: hit the $MAX_PAGES-page ceiling with a token still pending. " +
+                "Either the album is enormous or the server is handing back a token that " +
+                "never advances — treating as incomplete.")
+            complete = false
+        }
+
+        Log.i(TAG, "$short: ${items.size} items across $pages page(s)" +
+            if (complete) "" else " (INCOMPLETE)")
+
+        return Crawl(
+            outcome = AlbumOutcome(
+                url = url,
+                title = parsed.albumTitle,
+                items = items.size,
+                error = null,
+                degraded = degraded,
+                truncated = !complete,
+            ),
+            guard = CrawlGuard.AlbumOutcome(short, items.size, pages, complete),
+            entries = items.values.toList(),
+        )
     }
+
+    /**
+     * One page, with backoff.
+     *
+     * Retrying immediately after a rate limit is how a crawl turns backpressure into more
+     * pressure, so the wait grows and the whole crawl gives up rather than hammering. A
+     * null return is not fatal: the caller keeps what it has and marks itself incomplete,
+     * which costs the ability to prune and nothing else.
+     */
+    private suspend fun fetchPageWithRetries(
+        endpoint: AlbumPager.Endpoint,
+        token: String,
+        short: String,
+        pageNumber: Int,
+    ): AlbumPager.Page? {
+        var wait = PAGE_DELAY_MS
+        repeat(PAGE_RETRIES) { attempt ->
+            val page = runCatching { fetchPage(endpoint, token) }.getOrElse { e ->
+                Log.w(TAG, "$short page $pageNumber attempt ${attempt + 1}: ${e.message}")
+                null
+            }
+            if (page != null) return page
+            delay(wait)
+            wait *= 4
+        }
+        return null
+    }
+
+    private fun fetchPage(endpoint: AlbumPager.Endpoint, token: String): AlbumPager.Page {
+        val body = AlbumPager.buildRequestBody(endpoint, token)
+            .toRequestBody("application/x-www-form-urlencoded;charset=UTF-8".toMediaType())
+        val request = Request.Builder()
+            .url(AlbumPager.buildUrl(endpoint))
+            .header("User-Agent", UA)
+            .post(body)
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            val text = response.body?.string() ?: error("empty body")
+            return AlbumPager.parseResponse(text)
+        }
+    }
+
+    private fun pathOf(url: String): String =
+        runCatching { java.net.URI(url).path ?: "/" }.getOrDefault("/")
 
     private data class Fetched(val finalUrl: String, val body: String)
 
