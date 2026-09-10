@@ -36,6 +36,12 @@ import kotlin.random.Random
  * If dropping all three still leaves no unused photo, one already on screen is repeated.
  * Duplication is the terminal fallback and it is the right one: a repeated photograph
  * reads as a design choice, a black tile reads as a broken frame.
+ *
+ * **One slot is exempt from that ordering.** With recency on and something newly arrived,
+ * [reservedSlot] holds a tile back for the new photos, and that tile will take a recent
+ * photo of the wrong shape ahead of a well-shaped older one — the single place orientation
+ * is dropped in front of a preference rather than behind it. A stated exception rather than
+ * an oversight: see [reservedSlot] for why the guarantee has to be structural.
  */
 object CollageSelector {
 
