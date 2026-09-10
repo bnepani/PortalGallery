@@ -75,6 +75,59 @@ object CollageSelector {
             else Instant.ofEpochMilli(ms).atZone(zone).year
         }
 
+    /**
+     * How many grids of the remainder ledger [allocate] replays before it starts over.
+     *
+     * The bound exists so the cost cannot grow with a counter that ticks every dwell for
+     * months; resetting the ledger makes the sequence repeat rather than degrade. It has
+     * to outlast the thinnest bucket's wait, and that is what fixes the size: across the
+     * reference 20,000-photo archive the roots sum to roughly 400, so a bucket holding a
+     * single photo has a quota near 6/400 and waits some 67 grids for its seat. 512
+     * leaves headroom for an archive around fifty times that size.
+     */
+    private const val ROTATION_CYCLE = 512
+
+    /**
+     * The year bucket each slot should draw from, rotating so no era is squeezed out.
+     *
+     * Apportionment is largest-remainder: a bucket's quota is its weight times [slotCount],
+     * it is seated floor(quota) times outright, and the seats left over go to the largest
+     * fractional parts. Eight eras across six slots puts every quota below one, so *every*
+     * seat is a leftover seat — and a stateless pass then ranks the same eras first in
+     * every grid, leaving two years permanently invisible. That is the exact failure this
+     * function exists to prevent, so rotating the finished list is not enough either: the
+     * buckets that were ranked last stay at zero seats however the list is turned.
+     *
+     * The fix is to carry the remainders across grids. A bucket that loses a leftover seat
+     * keeps the fraction it was owed and starts the next grid ahead of the buckets that
+     * won, so the winners rotate on their own and the long-run share still tracks the
+     * weights. [rotation] chooses how many grids of that ledger to replay; grid 0 is a
+     * plain largest-remainder pass. Ties break towards the older year, which only decides
+     * the very first grid — after that the ledger has separated everything.
+     *
+     * floorMod rather than %, for the same reason as CollageLayout.templateAt: the counter
+     * is a plain Int on a frame that runs for months and will eventually wrap negative.
+     */
+    internal fun allocate(weights: Map<Int, Double>, slotCount: Int, rotation: Int): List<Int> {
+        if (weights.isEmpty() || slotCount <= 0) return emptyList()
+
+        val years = weights.keys.sorted().toIntArray()
+        val quota = DoubleArray(years.size) { weights.getValue(years[it]) * slotCount }
+        val credit = DoubleArray(years.size)
+        val picks = IntArray(slotCount)
+
+        repeat(Math.floorMod(rotation, ROTATION_CYCLE) + 1) {
+            for (i in credit.indices) credit[i] += quota[i]
+            for (s in picks.indices) {
+                var best = 0
+                for (i in credit.indices) if (credit[i] > credit[best]) best = i
+                credit[best] -= 1.0
+                picks[s] = years[best]
+            }
+        }
+        return picks.toList()
+    }
+
     fun <T> fill(
         candidates: List<T>,
         slots: List<CollageLayout.Slot>,
@@ -88,7 +141,46 @@ object CollageSelector {
         addedMs: (T) -> Long,
     ): List<T> {
         if (candidates.isEmpty() || slots.isEmpty()) return emptyList()
-        // Filled in over Steps 9-12.
-        return slots.map { candidates[random.nextInt(candidates.size)] }
+
+        // Steps 11-12 add the on-this-day, recency and orientation stages. What runs today
+        // is the two ends of the cascade: the era target, then the terminal repeat.
+        //
+        // Bucketed by index rather than by item, so the pools double as the draw pools and
+        // "already used in this grid" stays a question about positions, not about whether
+        // two candidates happen to be equal.
+        val pools: Map<Int, List<Int>> =
+            if (config.eraMix) {
+                bucketByYear(candidates.indices.toList(), zone) { captureMs(candidates[it]) }
+            } else {
+                emptyMap()
+            }
+        val targets =
+            if (pools.isEmpty()) {
+                emptyList()
+            } else {
+                val weights = bucketWeights(pools.map { (year, idx) -> year to idx.size })
+                allocate(weights, slots.size, rotation)
+            }
+
+        val all = candidates.indices.toList()
+        val used = BooleanArray(candidates.size)
+
+        fun draw(pool: List<Int>?, freshOnly: Boolean): Int? {
+            if (pool.isNullOrEmpty()) return null
+            val eligible = if (freshOnly) pool.filter { !used[it] } else pool
+            return if (eligible.isEmpty()) null else eligible[random.nextInt(eligible.size)]
+        }
+
+        return slots.indices.map { s ->
+            val era = targets.getOrNull(s)?.let { pools[it] }
+            val idx = draw(era, freshOnly = true)
+                ?: draw(all, freshOnly = true)
+                // Nothing unused is left. Repeat, preferring the era the slot was owed,
+                // because the alternative is a black tile.
+                ?: draw(era, freshOnly = false)
+                ?: all[random.nextInt(all.size)]
+            used[idx] = true
+            candidates[idx]
+        }
     }
 }

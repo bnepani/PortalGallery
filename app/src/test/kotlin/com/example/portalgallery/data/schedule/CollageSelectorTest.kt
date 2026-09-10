@@ -132,4 +132,86 @@ class CollageSelectorTest {
             buckets.getValue(CollageSelector.UNKNOWN_YEAR).map { it.id },
         )
     }
+
+    @Test
+    fun `every bucket appears within a few rotations when buckets exceed slots`() {
+        val years = 2019..2026 // 8 buckets
+        val items = years.flatMap { y -> (1..20).map { item("p$y-$it", y) } }
+        val slots = CollageLayout.forPanel(false).first().slots // 3 slots
+
+        val seen = mutableSetOf<Int>()
+        repeat(8) { r ->
+            fill(items, slots, CollageSelector.Config(eraMix = true, recency = false), rotation = r)
+                .forEach { seen.add(java.time.Instant.ofEpochMilli(it.captureMs).atZone(zone).year) }
+        }
+        assertEquals("every era must appear within 8 grids", years.toSet(), seen)
+    }
+
+    @Test
+    fun `single bucket does not crash and fills every slot`() {
+        val slots = CollageLayout.forPanel(false).first().slots
+        val picks = fill(
+            (1..20).map { item("p$it", 2024) }, slots,
+            CollageSelector.Config(eraMix = true),
+        )
+        assertEquals(slots.size, picks.size)
+    }
+
+    @Test
+    fun `allocate always hands out exactly one bucket per slot`() {
+        val weights = CollageSelector.bucketWeights(listOf(2019 to 400, 2026 to 6000))
+        (0 until 20).forEach { r ->
+            assertEquals(6, CollageSelector.allocate(weights, slotCount = 6, rotation = r).size)
+        }
+    }
+
+    @Test
+    fun `rotation moves the leftover seats to different buckets`() {
+        // Eight equal buckets over three slots: every quota is 0.375, so every seat is a
+        // leftover seat. A stateless largest-remainder pass ranks the same three eras
+        // first in every grid and the other five never appear at all.
+        val weights = (2019..2026).associateWith { 1.0 / 8 }
+        val grids = (0 until 8).map { CollageSelector.allocate(weights, slotCount = 3, rotation = it) }
+        assertEquals("every bucket must win a seat", (2019..2026).toSet(), grids.flatten().toSet())
+    }
+
+    @Test
+    fun `heavy buckets get proportionally more slots over many rotations`() {
+        // Rotation must not flatten the weights into a round robin: 2026 is owed nine
+        // times the screen time of 2019 and must still get it.
+        val weights = mapOf(2019 to 0.1, 2026 to 0.9)
+        val counts = (0 until 100)
+            .flatMap { CollageSelector.allocate(weights, slotCount = 6, rotation = it) }
+            .groupingBy { it }.eachCount()
+        assertEquals(600, counts.values.sum())
+        assertEquals(60.0, counts.getValue(2019).toDouble(), 6.0)
+    }
+
+    @Test
+    fun `a bucket too thin to win any single grid is still seated eventually`() {
+        // One photo against seven years of 2,857 — the shape of an archive with a stray
+        // scanned print in it. Its quota is about 0.016 of a six-slot grid, so it can
+        // never win outright; the carried remainder is what eventually seats it.
+        val weights = CollageSelector.bucketWeights(
+            listOf(2019 to 1) + (2020..2026).map { it to 2857 },
+        )
+        val seen = (0 until 128)
+            .flatMap { CollageSelector.allocate(weights, slotCount = 6, rotation = it) }
+            .toSet()
+        assertTrue("the thinnest era must not starve", 2019 in seen)
+    }
+
+    @Test
+    fun `allocate survives a wrapped rotation counter`() {
+        // The counter is a plain Int on a frame that runs for months, so it goes negative.
+        val weights = mapOf(2024 to 0.5, 2025 to 0.5)
+        assertEquals(4, CollageSelector.allocate(weights, slotCount = 4, rotation = -7).size)
+        assertEquals(4, CollageSelector.allocate(weights, slotCount = 4, rotation = Int.MIN_VALUE).size)
+    }
+
+    @Test
+    fun `allocate returns nothing when there is nothing to apportion`() {
+        assertTrue(CollageSelector.allocate(emptyMap(), slotCount = 6, rotation = 0).isEmpty())
+        assertTrue(CollageSelector.allocate(mapOf(2024 to 1.0), slotCount = 0, rotation = 0).isEmpty())
+    }
 }
