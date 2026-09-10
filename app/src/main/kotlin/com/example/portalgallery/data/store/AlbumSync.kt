@@ -202,8 +202,17 @@ class AlbumSync(private val store: PhotoStore) {
             // from `missing` on every later sync by hasPhoto(), so the gate never re-examines
             // them, and once nothing is left to download the sync succeeds and indexes them
             // as full-resolution photos.
-            val removed = writtenThisPass.count { (id, isVideo) -> store.deletePhoto(id, isVideo) }
-            Log.w(TAG, "gate aborted — removed $removed file(s) written before the verdict")
+            // An explicit loop, not `count { store.deletePhoto(...) }`. `count` reads as a
+            // pure query, which would hide the deletion — the whole of the fix — in the one
+            // position a reader has no reason to open. The concrete hazard is a later
+            // "simplification" to writtenThisPass.size: it compiles, the log still reads
+            // correctly, every test still passes, and the cleanup silently stops happening.
+            var removed = 0
+            for ((id, isVideo) in writtenThisPass) {
+                if (store.deletePhoto(id, isVideo)) removed++
+            }
+            Log.w(TAG, "gate aborted — removed $removed of ${writtenThisPass.size} file(s) " +
+                "written before the verdict")
             return@withContext Result.Failure("resolution gate failed — refusing to index thumbnails")
         }
 
