@@ -48,6 +48,33 @@ object CollageSelector {
     /** Photos added within this window are "new" for recency purposes. */
     private const val RECENT_WINDOW_MS = 21L * 24 * 60 * 60 * 1000
 
+    /** Bucket key for photos whose capture time is missing. Cannot collide with a real year. */
+    const val UNKNOWN_YEAR = -1
+
+    /**
+     * Slot share per year bucket, damped by sqrt of bucket size.
+     *
+     * **This is a product choice, stated.** A family archive is not uniform: 2026 may hold
+     * 6,000 photos and 2019 four hundred. Strict one-slot-per-year would give 2019 16.7%
+     * of screen time for 2% of the archive, making a 2019 photo recur ~15x as often as a
+     * 2026 one. Raw proportional allocation goes the other way and buries the old years.
+     * sqrt sits between: old years stay clearly visible, recent years still dominate.
+     */
+    fun bucketWeights(sizes: List<Pair<Int, Int>>): Map<Int, Double> {
+        val raw = sizes.associate { (year, n) -> year to sqrt(n.toDouble()) }
+        val total = raw.values.sum().takeIf { it > 0.0 } ?: return sizes.associate { it.first to 0.0 }
+        return raw.mapValues { it.value / total }
+    }
+
+    fun <T> bucketByYear(items: List<T>, zone: ZoneId, captureMs: (T) -> Long): Map<Int, List<T>> =
+        items.groupBy { t ->
+            val ms = captureMs(t)
+            // captureMs 0 means "unknown" — the index predates timestamps. Group these
+            // together rather than mapping them all to 1970 and inventing a huge bucket.
+            if (ms <= 0L) UNKNOWN_YEAR
+            else Instant.ofEpochMilli(ms).atZone(zone).year
+        }
+
     fun <T> fill(
         candidates: List<T>,
         slots: List<CollageLayout.Slot>,
