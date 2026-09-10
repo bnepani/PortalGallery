@@ -19,6 +19,10 @@
          service the frame can detect absence but never presence, because the camera dies
          the moment the panel powers off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Required from API 34 alongside the typed service below. Harmless on the Portal's
+         API 28, which predates both, but targetSdk is 34 and Android 14 throws
+         MissingForegroundServiceTypeException without the pair. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
@@ -102,9 +106,14 @@
 
         <!-- Runs only while presence detection is enabled. Holds the process foreground
              so Android 9 does not revoke camera access once the panel powers off. -->
+        <!-- foregroundServiceType is mandatory from API 34: startForeground() on an
+             untyped service throws MissingForegroundServiceTypeException there. The
+             Portal is API 28 so it never hit this, but targetSdk is 34 and lint treats
+             it as an error — which went unnoticed because lint had never run here. -->
         <service
             android:name=".data.presence.PresenceService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="camera" />
 
         <!-- exported=true is required for system broadcasts like BOOT_COMPLETED. -->
         <receiver
