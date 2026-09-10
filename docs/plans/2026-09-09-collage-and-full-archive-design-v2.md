@@ -553,6 +553,75 @@ advanced to 2026-09-01. End-to-end confirmation of the requirement in §1, on ha
 
 ---
 
+## 11c. The §5.2 probe — PASSED, with two corrections, 2026-09-10
+
+Executed against the live album. **Phase 2 is go.**
+
+```
+pages fetched : 67
+unique items  : 19,974
+truncated     : False        (the token ran out on its own)
+capture span  : 2019-04-27 .. 2026-09-01
+wire bytes    : 11.8 MB      elapsed 120s at 1 request/second
+```
+
+The whole archive is reachable. Every structural prediction in §5.1 held: `ds:1` declares
+`snAcKc`, the tuple is `[albumId, null, null, shareKey]`, the 226-char token sits at
+`ds:1 data[2]`, and the path prefix is `/_/PhotosUi/`. Response entries have the identical
+shape to the HTML path — `len=10`, media sub-array `len=12`, dimensions present — so §5.5's
+plan to reuse the decoder holds.
+
+### Correction 1 — the token goes in slot 1, not slot 2
+
+§5.1 said *"the request tuple has a `null` in exactly the slot a token would occupy."*
+There are two nulls, and the design picked the wrong one.
+
+| Args | Result |
+|---|---|
+| `[id, null, token, key]` | 300 entries, **0 new** — silently returns page 1 again |
+| `[id, token, null, key]` | 300 entries, **300 new** — correct |
+
+The failure mode matters more than the fix: the wrong slot returns HTTP 200, a
+well-formed 300-entry payload, and **a fresh continuation token every time**. Five pages
+in, a crawler would report 1,500 items fetched and hold 300 unique ones. Nothing in the
+transport layer can detect this — only comparing ids across pages can. `AlbumPager` needs
+a test that asserts page 2 contains ids absent from page 1, not merely that page 2 parses.
+
+### Correction 2 — the chunk length prefix cannot be trusted
+
+§5.1's "walk the length-prefixed chunk framing" does not survive contact. The declared
+length is in **bytes** while the payload is text, and it is off by one against the JSON it
+introduces:
+
+```
+chunk 1: declared=190623  actual JSON ends at 190622
+```
+
+Slicing by the declared length fails to parse. `AlbumPager` should ignore the counts and
+walk with an incremental JSON decoder (`raw_decode` and its equivalents), taking each
+value's true end offset. That is also what makes the parse robust if Google adjusts the
+framing.
+
+### The year distribution — and §7.1's rationale is backwards
+
+§12 asked for the real bucket distribution. It is:
+
+| 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|
+| 3,657 | 3,843 | 3,280 | 2,916 | 1,297 | 3,189 | 1,134 | 658 |
+
+**The opposite of what §7.1 assumed.** That section justifies sqrt damping with *"a family
+album accumulates, so 2026 may hold 6,000 photos and 2019 four hundred"* — but 2019 is the
+second-largest year at 18% of the archive and 2026 is the smallest at 3.3%.
+
+The mechanism survives; only the story is wrong. Damping still moderates between
+proportional and uniform, and here it works in the opposite direction from the one
+described: it lifts 2026 from a 3.3% proportional share to 6.7%, which is the desirable
+outcome for the newest photos. But the KDoc on `CollageSelector.bucketWeights` states the
+reasoning with invented numbers and must be rewritten against these measured ones.
+
+---
+
 ## 12. Open questions
 
 - [ ] **Does the `snAcKc` RPC work?** Gate on §5.2.
