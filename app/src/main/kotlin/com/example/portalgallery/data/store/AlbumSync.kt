@@ -156,7 +156,11 @@ class AlbumSync(private val store: PhotoStore) {
                             // Resolution gate: catches the case where a URL silently
                             // resolves to a thumbnail. A count check cannot see this,
                             // because the count is unchanged. Stills only — the gate
-                            // decodes a bitmap, which an MP4 is not.
+                            // decodes a bitmap, which an MP4 is not. The compareAndSet
+                            // makes that exactly one still per sync, deliberately: a
+                            // degraded URL degrades every item alike, so one sample
+                            // settles it, and the gate is a tripwire rather than a
+                            // per-item validator.
                             if (!photo.isVideo && resolutionChecked.compareAndSet(false, true)) {
                                 if (!isPlausiblePhoto(bytes)) {
                                     Log.e(TAG, "resolution gate FAILED — got a thumbnail, aborting sync")

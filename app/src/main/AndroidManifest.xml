@@ -20,8 +20,14 @@
          the moment the panel powers off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Required from API 34 alongside the typed service below. Harmless on the Portal's
-         API 28, which predates both, but targetSdk is 34 and Android 14 throws
-         MissingForegroundServiceTypeException without the pair. -->
+         API 28, which predates both, but targetSdk is 34 and Android 14 rejects the
+         typed service without it.
+
+         Necessary, not sufficient: on API 34 startForeground() with type `camera` also
+         needs CAMERA *granted at the moment of the call*, and PresenceService.onCreate
+         calls it unconditionally. On a device where the user never granted CAMERA that
+         throws. The Portal is API 28 so this is latent there, but do not read the
+         permission pair as making the call safe. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-feature
         android:name="android.hardware.camera"
@@ -105,11 +111,12 @@
         </receiver>
 
         <!-- Runs only while presence detection is enabled. Holds the process foreground
-             so Android 9 does not revoke camera access once the panel powers off. -->
-        <!-- foregroundServiceType is mandatory from API 34: startForeground() on an
-             untyped service throws MissingForegroundServiceTypeException there. The
-             Portal is API 28 so it never hit this, but targetSdk is 34 and lint treats
-             it as an error — which went unnoticed because lint had never run here. -->
+             so Android 9 does not revoke camera access once the panel powers off.
+
+             foregroundServiceType is mandatory from API 34: startForeground() on an
+             untyped service throws MissingForegroundServiceTypeException there, and lint
+             treats the omission as an error. The Portal is API 28 so it never hit this,
+             but targetSdk is 34. -->
         <service
             android:name=".data.presence.PresenceService"
             android:exported="false"

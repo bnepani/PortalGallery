@@ -118,6 +118,7 @@ class SlideshowActivity : AppCompatActivity() {
     private val front: ImageView get() = if (frontIsA) binding.ivPhotoA else binding.ivPhotoB
     private val back: ImageView get() = if (frontIsA) binding.ivPhotoB else binding.ivPhotoA
 
+    /** Post this only through [restartWatchdog] — see its KDoc for why. */
     private val watchdogRunnable = object : Runnable {
         override fun run() {
             val interval = prefs.slideshowIntervalSeconds * 1000L
@@ -129,7 +130,10 @@ class SlideshowActivity : AppCompatActivity() {
                 Log.w(TAG, "watchdog: no render in ${interval * 3}ms, forcing advance")
                 advance()
             }
-            handler.postDelayed(this, interval)
+            // Via restartWatchdog() rather than a bare postDelayed, so that stays the
+            // single post site — and so any stray duplicate loop is removed the next
+            // time this one fires, instead of surviving until the next sleep or pause.
+            restartWatchdog()
         }
     }
 
@@ -652,8 +656,11 @@ class SlideshowActivity : AppCompatActivity() {
             .load(photo.file)
             // Our own transition runs below; Glide's would fight it.
             .dontAnimate()
-            // The file is already on our disk. AUTOMATIC would re-encode a second copy into
-            // Glide's 250MB LRU — pure churn on a device that runs for months.
+            // The file is already on our disk. AUTOMATIC would re-encode a second copy of
+            // every photo into Glide's cache — a duplicate of the whole ~92MB library, and
+            // a steady stream of flash writes on a device that runs for months. NONE
+            // decodes from our own file each time instead: a little more CPU per slide,
+            // which is the cheaper side of that trade here.
             .diskCacheStrategy(DiskCacheStrategy.NONE)
             .listener(object : RequestListener<Drawable> {
                 override fun onLoadFailed(
@@ -799,11 +806,15 @@ class SlideshowActivity : AppCompatActivity() {
     }
 
     /**
-     * The only place watchdogRunnable is posted.
+     * The only place watchdogRunnable is posted — including its own self-repost.
      *
-     * It re-posts itself, so a bare postDelayed() adds a *permanent* second loop. That was the
-     * bug: exitSleep() posted it, then its own startActivity(REORDER_TO_FRONT) delivered
-     * onResume, which posted it again — one extra loop per presence wake, forever.
+     * The runnable re-posts itself, so every bare postDelayed() starts another
+     * self-sustaining loop, each checking for a stall — and forcing an advance — on its own
+     * schedule. That was the bug: exitSleep() posted it, then its own
+     * startActivity(REORDER_TO_FRONT) delivered onResume, which posted it again, for two
+     * loops. Not forever, though: removeCallbacks(Runnable) drops *all* pending posts of a
+     * runnable, and enterSleep(), onPause() and this method all call it, so a stray loop
+     * lives only until the next sleep, pause, or watchdog tick.
      */
     private fun restartWatchdog() {
         handler.removeCallbacks(watchdogRunnable)
