@@ -74,6 +74,15 @@ class AlbumIndex(private val root: File) {
         val pageCount: Int = 0,
         val complete: Boolean = false,
         val items: List<Entry> = emptyList(),
+        /**
+         * The ids chosen to live on disk when this index was written.
+         *
+         * Persisted because the next re-roll needs the previous generation to implement
+         * [ResidentSelector.keepIds]'s grace period — a file may only be deleted once it
+         * has been unwanted across two crawls, which is what makes it safe to re-roll the
+         * sample while the renderer is holding an older list of photos.
+         */
+        val resident: List<String> = emptyList(),
     ) {
         val size: Int get() = items.size
     }
