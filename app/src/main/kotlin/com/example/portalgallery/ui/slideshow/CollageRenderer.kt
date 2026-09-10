@@ -6,6 +6,7 @@ import android.os.Handler
 import android.util.Log
 import android.view.Gravity
 import android.view.View
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import com.bumptech.glide.Glide
@@ -54,6 +55,12 @@ class CollageRenderer(
     companion object {
         private const val TAG = "PortalGallery"
 
+        /** Matches SlideshowActivity's, so the two modes zoom by the same amount. */
+        private const val KEN_BURNS_SCALE = 1.08f
+
+        /** Share of a tile's available overhang the pan is allowed to spend. */
+        private const val KEN_BURNS_DRIFT_FRACTION = 0.6f
+
         /**
          * Floor on the swap interval.
          *
@@ -69,6 +76,9 @@ class CollageRenderer(
 
     // Sized from the pool rather than from MAX_SLOTS, so a pool of the wrong size is a
     // template that gets truncated with a log rather than an index out of bounds.
+
+    /** Laid-out tile width per slot, kept so Ken Burns does not have to wait for measure. */
+    private val slotWidthPx = IntArray(tiles.size)
 
     /** What each slot is showing, or has been asked to show. */
     private val current = arrayOfNulls<PhotoStore.StoredPhoto>(tiles.size)
@@ -183,6 +193,7 @@ class CollageRenderer(
                 tile.a.alpha = 0f
                 tile.b.alpha = 0f
                 tile.frame.visibility = View.GONE
+                slotWidthPx[i] = 0
                 current[i] = null
                 frontIsA[i] = true
                 renderedAtMs[i] = 0L
@@ -201,6 +212,7 @@ class CollageRenderer(
             val right = (slot.right * panelW).roundToInt()
             val bottom = (slot.bottom * panelH).roundToInt()
 
+            slotWidthPx[i] = right - left
             tile.frame.layoutParams = FrameLayout.LayoutParams(
                 right - left,
                 bottom - top,
@@ -257,6 +269,9 @@ class CollageRenderer(
         // whatever pose its last turn as the live tile left it in.
         incoming.animate().cancel()
         incoming.alpha = 0f
+        incoming.translationX = 0f
+        incoming.scaleX = 1f
+        incoming.scaleY = 1f
 
         Glide.with(context)
             .load(photo.file)
@@ -346,13 +361,70 @@ class CollageRenderer(
         frontIsA[slot] = !frontIsA[slot]
         renderedAtMs[slot] = System.currentTimeMillis()
 
-        // A fade from this slot's previous turn may still be running on the outgoing
-        // view. Cancel it rather than letting two alpha animations race.
+        // The outgoing view is most likely mid-Ken-Burns. Cancel that before fading it, so
+        // its transform stops where it is instead of drifting on behind alpha 0 and
+        // fighting the reset below.
         outgoing.animate().cancel()
 
-        incoming.animate().alpha(1f).setDuration(duration).start()
-        outgoing.animate().alpha(0f).setDuration(duration).start()
+        incoming.animate()
+            .alpha(1f)
+            .setDuration(duration)
+            .withEndAction { startKenBurns(slot, incoming) }
+            .start()
+
+        outgoing.animate()
+            .alpha(0f)
+            .setDuration(duration)
+            .withEndAction {
+                outgoing.translationX = 0f
+                outgoing.scaleX = 1f
+                outgoing.scaleY = 1f
+            }
+            .start()
     }
+
+    /**
+     * Slow pan-and-zoom across a tile, for the reason the full-screen path has one: a
+     * panel that would otherwise hold near-identical frames for months.
+     *
+     * The drift has to be measured from the slot, not the panel. SlideshowActivity uses
+     * `displayMetrics.widthPixels * 0.02f`, which is 38.4px on this 1920px-wide panel,
+     * and a 640px tile scaled to [KEN_BURNS_SCALE] overhangs its own rect by only
+     * 640 * 0.08 / 2 = 25.6px per side. [kenBurnsDrift] spends
+     * [KEN_BURNS_DRIFT_FRACTION] of that overhang instead: 15.36px on the same tile.
+     *
+     * What overshooting the overhang costs is worth stating precisely, because the
+     * obvious guess is wrong. A tile's content is clipped to its bounds *before* its
+     * transform is applied, so panning further than the overhang does not drag the photo
+     * off its own edge — it slides the whole clipped tile far enough that part of the
+     * slot rect is left uncovered. What shows through there is the black root only for a
+     * slot on the edge of the panel. For an interior slot it is the neighbouring tile,
+     * which is drawn underneath. Either way it reads as a fault, which is the point.
+     *
+     * Neighbouring slots drift in opposite directions. All six sliding the same way at
+     * once reads as the whole wall shifting rather than as each photograph breathing.
+     *
+     * The dwell is nominal, not exact. A tile is swapped once per round, and a round is
+     * as many ticks as there are slots — but the order within a round is shuffled, so the
+     * real gap runs from 2 to 2n-1 ticks. Landing early leaves the tile parked at full
+     * zoom for a moment; landing late has the swap cancel the animation. Both are fine,
+     * and neither is worth a second timer to avoid.
+     */
+    private fun startKenBurns(slot: Int, v: ImageView) {
+        if (!prefs.kenBurnsEnabled) return
+        val drift = kenBurnsDrift(slotWidthPx[slot])
+        v.animate()
+            .scaleX(KEN_BURNS_SCALE)
+            .scaleY(KEN_BURNS_SCALE)
+            .translationX(if (slot % 2 == 0) drift else -drift)
+            .setDuration(swapIntervalMs() * slots.size.coerceAtLeast(1))
+            .setInterpolator(LinearInterpolator())
+            .start()
+    }
+
+    /** Half the width the zoom adds is the overhang on each side; spend part of it. */
+    private fun kenBurnsDrift(slotWidthPx: Int): Float =
+        slotWidthPx * (KEN_BURNS_SCALE - 1f) / 2f * KEN_BURNS_DRIFT_FRACTION
 
     // --- the driver ---------------------------------------------------------
 
@@ -469,6 +541,9 @@ class CollageRenderer(
         val live = if (frontIsA[slot]) tile.a else tile.b
         for (v in listOf(tile.a, tile.b)) {
             v.animate().cancel()
+            v.translationX = 0f
+            v.scaleX = 1f
+            v.scaleY = 1f
             // A slot that has never rendered has nothing to show, so neither of its views
             // is the live one — leave both hidden rather than revealing an empty view.
             v.alpha = if (v === live && renderedAtMs[slot] > 0L) 1f else 0f
