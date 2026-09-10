@@ -36,4 +36,109 @@ object CollageLayout {
     }
 
     data class Template(val name: String, val slots: List<Slot>)
+
+    /**
+     * Templates for a landscape panel. Pixel sizes in the comments are for the Portal+'s
+     * 1920x1080, which is the only panel this frame actually runs on; the fractions hold
+     * for any landscape ratio.
+     */
+    private val LANDSCAPE = listOf(
+        // Three 640x1080 columns. The whole reason collage mode exists: on a landscape
+        // panel this is the only layout where a portrait photo fills its tile edge to edge.
+        Template(
+            "thirds-portrait",
+            (0 until 3).map { i -> Slot(i / 3f, 0f, (i + 1) / 3f, 1f, wantPortrait = true) },
+        ),
+        // Six 640x540 cells — the densest layout the view pool allows.
+        Template(
+            "grid-3x2",
+            (0 until 2).flatMap { row ->
+                (0 until 3).map { col ->
+                    Slot(col / 3f, row / 2f, (col + 1) / 3f, (row + 1) / 2f, wantPortrait = false)
+                }
+            },
+        ),
+        // A 960x1080 hero beside four 480x540 cells.
+        Template(
+            "hero-left",
+            listOf(Slot(0f, 0f, 0.5f, 1f, wantPortrait = true)) +
+                (0 until 2).flatMap { row ->
+                    (0 until 2).map { col ->
+                        Slot(
+                            0.5f + col * 0.25f, row * 0.5f,
+                            0.5f + (col + 1) * 0.25f, (row + 1) * 0.5f,
+                            wantPortrait = false,
+                        )
+                    }
+                },
+        ),
+        // Two 576x1080 portrait bookends around a stack of two 768x540 landscapes.
+        Template(
+            "portrait-pair-centre-stack",
+            listOf(
+                Slot(0f, 0f, 0.3f, 1f, wantPortrait = true),
+                Slot(0.3f, 0f, 0.7f, 0.5f, wantPortrait = false),
+                Slot(0.3f, 0.5f, 0.7f, 1f, wantPortrait = false),
+                Slot(0.7f, 0f, 1f, 1f, wantPortrait = true),
+            ),
+        ),
+        // A 1920x648 banner over three 640x432 cells — everything landscape, so this is
+        // the template that empties the landscape end of the library.
+        Template(
+            "banner-over-thirds",
+            listOf(Slot(0f, 0f, 1f, 0.6f, wantPortrait = false)) +
+                (0 until 3).map { i ->
+                    Slot(i / 3f, 0.6f, (i + 1) / 3f, 1f, wantPortrait = false)
+                },
+        ),
+    )
+
+    /**
+     * The same ideas transposed for a portrait panel (1080x1920). The app is locked to
+     * landscape on the Portal, but the templates are cheap and keeping both sets means the
+     * geometry tests cover the transposition rather than leaving it to be discovered on
+     * some future device.
+     */
+    private val PORTRAIT = listOf(
+        // Six 540x640 cells — portrait-shaped, so this is the portrait panel's equivalent
+        // of thirds-portrait: the layout that soaks up the majority orientation.
+        Template(
+            "grid-2x3",
+            (0 until 3).flatMap { row ->
+                (0 until 2).map { col ->
+                    Slot(col / 2f, row / 3f, (col + 1) / 2f, (row + 1) / 3f, wantPortrait = true)
+                }
+            },
+        ),
+        // Three 1080x640 bands, the counterpart to thirds-portrait.
+        Template(
+            "thirds-landscape",
+            (0 until 3).map { i -> Slot(0f, i / 3f, 1f, (i + 1) / 3f, wantPortrait = false) },
+        ),
+        // A 1080x960 hero above four 540x480 cells.
+        Template(
+            "hero-top",
+            listOf(Slot(0f, 0f, 1f, 0.5f, wantPortrait = false)) +
+                (0 until 2).flatMap { row ->
+                    (0 until 2).map { col ->
+                        Slot(
+                            col * 0.5f, 0.5f + row * 0.25f,
+                            (col + 1) * 0.5f, 0.5f + (row + 1) * 0.25f,
+                            wantPortrait = false,
+                        )
+                    }
+                },
+        ),
+        // Two 1080x960 halves. The quietest template in either set; it exists so the
+        // rotation has somewhere to breathe between the dense ones.
+        Template(
+            "halves",
+            listOf(
+                Slot(0f, 0f, 1f, 0.5f, wantPortrait = false),
+                Slot(0f, 0.5f, 1f, 1f, wantPortrait = false),
+            ),
+        ),
+    )
+
+    fun forPanel(portrait: Boolean): List<Template> = if (portrait) PORTRAIT else LANDSCAPE
 }
