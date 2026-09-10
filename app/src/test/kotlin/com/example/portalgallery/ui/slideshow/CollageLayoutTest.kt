@@ -1,6 +1,7 @@
 package com.example.portalgallery.ui.slideshow
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,12 +22,26 @@ class CollageLayoutTest {
     }
 
     @Test
-    fun `landscape set is non-empty and within the view pool`() {
-        val set = CollageLayout.forPanel(portrait = false)
-        assertTrue("expected several templates", set.size >= 4)
-        set.forEach {
-            assertTrue("${it.name} exceeds MAX_SLOTS", it.slots.size <= CollageLayout.MAX_SLOTS)
-            assertTrue("${it.name} has no slots", it.slots.isNotEmpty())
+    fun `an exactly square slot counts as landscape`() {
+        // The tie the whole tagging guard pivots on. 540x540 is neither taller nor wider;
+        // isPortraitOn breaks the tie towards landscape, and every wantPortrait tag in
+        // both sets was assigned on that basis.
+        val s = CollageLayout.Slot(0f, 0f, 0.5f, 0.5f, wantPortrait = false)
+        assertFalse(s.isPortraitOn(1080, 1080))
+    }
+
+    @Test
+    fun `both sets are non-empty and within the view pool`() {
+        // Both, not just landscape: grid-2x3 already sits at exactly MAX_SLOTS, so a
+        // seventh slot added to any portrait template would overflow the renderer's
+        // fixed view pool with nothing to catch it.
+        listOf(false, true).forEach { portrait ->
+            val set = CollageLayout.forPanel(portrait)
+            assertTrue("expected several templates", set.size >= 4)
+            set.forEach {
+                assertTrue("${it.name} exceeds MAX_SLOTS", it.slots.size <= CollageLayout.MAX_SLOTS)
+                assertTrue("${it.name} has no slots", it.slots.isNotEmpty())
+            }
         }
     }
 
@@ -110,18 +125,22 @@ class CollageLayoutTest {
 
     @Test
     fun `template rotation is deterministic and eventually visits every template`() {
-        val set = CollageLayout.forPanel(portrait = false)
-        val seen = (0 until set.size * 3).map { CollageLayout.templateAt(portrait = false, index = it).name }
-        assertEquals(set.map { it.name }.toSet(), seen.toSet())
-        assertEquals(
-            CollageLayout.templateAt(portrait = false, index = 7).name,
-            CollageLayout.templateAt(portrait = false, index = 7).name,
-        )
+        listOf(false, true).forEach { portrait ->
+            val set = CollageLayout.forPanel(portrait)
+            val seen = (0 until set.size * 3).map { CollageLayout.templateAt(portrait, index = it).name }
+            assertEquals(set.map { it.name }.toSet(), seen.toSet())
+            assertEquals(
+                CollageLayout.templateAt(portrait, index = 7).name,
+                CollageLayout.templateAt(portrait, index = 7).name,
+            )
+        }
     }
 
     @Test
     fun `negative and large indices are safe`() {
-        CollageLayout.templateAt(portrait = false, index = -3)
-        CollageLayout.templateAt(portrait = false, index = Int.MAX_VALUE)
+        listOf(false, true).forEach { portrait ->
+            CollageLayout.templateAt(portrait, index = -3)
+            CollageLayout.templateAt(portrait, index = Int.MAX_VALUE)
+        }
     }
 }

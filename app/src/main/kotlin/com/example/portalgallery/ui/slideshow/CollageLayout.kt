@@ -58,10 +58,11 @@ object CollageLayout {
                 }
             },
         ),
-        // A 960x1080 hero beside four 480x540 cells. Every slot is portrait, the small
-        // ones only just: quartering the right half of a 16:9 panel tips each cell past
-        // square. They look like thumbnails and read as landscape, but tagging them that
-        // way would fill them with photos that letterbox.
+        // A 960x1080 hero beside four 480x540 cells. Every slot is portrait, including the
+        // small ones: half of a 16:9 panel is already 8:9 — past square — and quartering
+        // that half preserves the aspect exactly, so the cells inherit it. They are small
+        // enough to read as thumbnails and get tagged landscape by eye, which would fill
+        // them with photos that letterbox.
         Template(
             "hero-left",
             listOf(Slot(0f, 0f, 0.5f, 1f, wantPortrait = true)) +
@@ -97,10 +98,10 @@ object CollageLayout {
     )
 
     /**
-     * The same ideas transposed for a portrait panel (1080x1920). The app is locked to
-     * landscape on the Portal, but the templates are cheap and keeping both sets means the
-     * geometry tests cover the transposition rather than leaving it to be discovered on
-     * some future device.
+     * The same ideas transposed for a portrait panel (1080x1920). This is a live path, not
+     * insurance: the manifest leaves screenOrientation deliberately unspecified so the frame
+     * follows the Portal's physical mounting, and a portrait-mounted Portal is a supported
+     * install. On one, this is the only set that ever runs.
      */
     private val PORTRAIT = listOf(
         // Six 540x640 cells — portrait-shaped, so this is the portrait panel's equivalent
