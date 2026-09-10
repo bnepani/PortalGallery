@@ -88,6 +88,21 @@ class CollageLayoutTest {
     }
 
     @Test
+    fun `portrait set slot orientation tags match their shape on a portrait panel`() {
+        // The same guard for the transposed set. hero-left shipped with four mis-tagged
+        // cells until the landscape version of this test caught them; the portrait set
+        // has the identical trap in hero-top, where the cells land just short of square.
+        CollageLayout.forPanel(portrait = true).forEach { t ->
+            t.slots.forEachIndexed { i, s ->
+                assertEquals(
+                    "${t.name}[$i] tag disagrees with its geometry on 1080x1920",
+                    s.wantPortrait, s.isPortraitOn(1080, 1920),
+                )
+            }
+        }
+    }
+
+    @Test
     fun `template names are unique`() {
         val names = allTemplates().map { it.name }
         assertEquals(names.size, names.toSet().size)
