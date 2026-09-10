@@ -139,6 +139,13 @@ class CollageSelectorTest {
     fun `most constrained slot is filled first`() {
         // One portrait photo, one portrait slot among landscape ones. Left-to-right greedy
         // assignment can consume it on slot 0; most-constrained-first must not.
+        //
+        // Keep this, but do not mistake it for the test that pins the ordering: it passes
+        // under every ordering, because stage (b) relaxes era while holding the shape, so
+        // slot 0 never reaches the portrait while unused landscapes remain. What it does
+        // pin is that a portrait slot gets the portrait. The test that discriminates the
+        // orderings is `a slot that can match its era strictly is ordered ahead of one
+        // that cannot`.
         val slots = listOf(
             CollageLayout.Slot(0f, 0f, 0.5f, 0.5f, wantPortrait = false),
             CollageLayout.Slot(0.5f, 0f, 1f, 1f, wantPortrait = true),
@@ -148,6 +155,40 @@ class CollageSelectorTest {
             (1..20).map { item("land$it", 2024, portrait = false) }
         val picks = fill(items, slots, CollageSelector.Config(eraMix = false))
         assertEquals("theOnlyPortrait", picks[1].id)
+    }
+
+    @Test
+    fun `a slot that can match its era strictly is ordered ahead of one that cannot`() {
+        // Two portrait slots on different eras, and exactly one portrait photo in the whole
+        // candidate set, sitting in era A. Only the era-A slot can be served strictly.
+        //
+        // Order it second and it loses the photo: the era-B slot finds its own stage (a)
+        // empty, reaches the whole library at stage (b), and takes the portrait from the
+        // wrong era — after which the era-A slot falls to stage (c) for a landscape. One
+        // era target destroyed for nothing, because the count of well-shaped tiles is the
+        // same either way. Ordering it first keeps era and shape together on one slot.
+        //
+        // The targeting is built here rather than drawn from `allocate`, so the test says
+        // nothing about which bucket that function hands to which slot at a given rotation.
+        val slots = listOf(
+            CollageLayout.Slot(0f, 0f, 0.5f, 1f, wantPortrait = true), // slot 0 -> era B
+            CollageLayout.Slot(0.5f, 0f, 1f, 1f, wantPortrait = true), // slot 1 -> era A
+        )
+        val eraA = listOf(0, 1, 2) // candidate 0 is the only portrait anywhere
+        val eraB = listOf(3, 4, 5)
+        val portrait = booleanArrayOf(true, false, false, false, false, false)
+
+        val order = CollageSelector.fillOrder(
+            open = listOf(0, 1),
+            slots = slots,
+            bucketOf = { s -> if (s == 0) eraB else eraA },
+            isPortraitAt = { portrait[it] },
+            isUsed = { false },
+        )
+
+        // Slot 0 is placed first both by plain left-to-right and by ranking on the raw
+        // strict count, which puts its empty pool at the front. Neither is correct.
+        assertEquals(listOf(1, 0), order)
     }
 
     @Test

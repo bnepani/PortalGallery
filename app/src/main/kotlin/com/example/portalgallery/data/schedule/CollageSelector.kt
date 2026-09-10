@@ -226,6 +226,48 @@ object CollageSelector {
     private fun reservedSlot(recentCount: Int, slotCount: Int, rotation: Int): Int =
         if (recentCount == 0) -1 else Math.floorMod(rotation, slotCount)
 
+    /**
+     * The order [fill] visits its unreserved slots in: most-constrained-first, ranked by
+     * the size of each slot's stage-(a) pool — its era bucket narrowed to unused candidates
+     * of its own orientation.
+     *
+     * **This buys era fidelity and nothing else.** It cannot reduce the number of
+     * ill-fitting tiles, and the KDoc should not be read as claiming otherwise: stage (b)
+     * relaxes era while holding the shape, so the count of slots that get a well-shaped
+     * photo is min(supply of that shape, slots wanting it) whatever the order. What order
+     * decides is *which* slot gets the scarce photo, and therefore whether the era target
+     * [allocate] worked to produce survives or is thrown away.
+     *
+     * Two slots' stage-(a) pools are either identical (same bucket, same shape) or disjoint,
+     * so slots that can be served strictly never compete with one another. The only slot
+     * that can spoil another's era target is one whose own stage (a) is empty and which
+     * therefore reaches across the whole library at stage (b).
+     *
+     * **Which is why an empty pool sorts last, not first.** Ranking it first — the reading
+     * of "fewest eligible candidates" that the plain count gives — is not merely unhelpful,
+     * it deterministically produces the worst available order in exactly the case the rule
+     * exists to fix, and so does worse than not sorting at all. A slot with nothing strictly
+     * eligible has already lost its era target however early it runs; running it first only
+     * lets it take a photo another slot could still have used strictly. See the
+     * `a slot that can match its era strictly is ordered ahead of one that cannot` test,
+     * which is the one that pins this; the black-box `most constrained slot is filled first`
+     * cannot distinguish any of these orderings.
+     *
+     * sortedBy is stable, so equally constrained slots keep their natural order and the grid
+     * stays reproducible.
+     */
+    internal fun fillOrder(
+        open: List<Int>,
+        slots: List<CollageLayout.Slot>,
+        bucketOf: (Int) -> List<Int>,
+        isPortraitAt: (Int) -> Boolean,
+        isUsed: (Int) -> Boolean,
+    ): List<Int> = open.sortedBy { s ->
+        val want = slots[s].wantPortrait
+        val strict = bucketOf(s).count { !isUsed(it) && isPortraitAt(it) == want }
+        if (strict == 0) Int.MAX_VALUE else strict
+    }
+
     fun <T> fill(
         candidates: List<T>,
         slots: List<CollageLayout.Slot>,
@@ -303,27 +345,15 @@ object CollageSelector {
             chosen[reserved] = idx
         }
 
-        // Most-constrained-first: slots are ranked by the size of stage (a) below, their
-        // strictest pool, counted once here rather than recomputed as the grid fills.
-        //
-        // Be precise about what this buys, because it is less than it looks. It cannot
-        // protect orientation: stage (b) relaxes era while holding the shape, so no slot
-        // takes a wrong-shaped photo while a right-shaped one is unused, in any order at
-        // all. What it protects is the era target. Any two slots' stage-(a) pools are
-        // either identical (same bucket and same shape) or disjoint, so slots that can be
-        // served strictly never compete with one another; the only slot that can spoil
-        // another's era target is one whose own stage (a) is empty and which therefore
-        // reaches across the whole library at stage (b).
-        //
-        // Which is why an empty count sorts last, not first. A slot with nothing strictly
-        // eligible is not the constrained one — it has already lost its era target however
-        // early it runs — and running it first only lets it take a photo some other slot
-        // could still have used strictly. sortedBy is stable, so equally constrained slots
-        // keep their natural order and the grid stays reproducible.
-        val order = open.sortedBy { s ->
-            val strict = free(fits(target[s] ?: all, slots[s].wantPortrait)).size
-            if (strict == 0) Int.MAX_VALUE else strict
-        }
+        // Counted once here, after the reservation has taken its photo, rather than
+        // recomputed as the grid fills. See [fillOrder] for what the order is worth.
+        val order = fillOrder(
+            open = open,
+            slots = slots,
+            bucketOf = { target[it] ?: all },
+            isPortraitAt = { isPortrait(candidates[it]) },
+            isUsed = { used[it] },
+        )
 
         for (s in order) {
             val want = slots[s].wantPortrait
