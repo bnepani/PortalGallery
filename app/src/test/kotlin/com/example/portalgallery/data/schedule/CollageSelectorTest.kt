@@ -151,6 +151,50 @@ class CollageSelectorTest {
     }
 
     @Test
+    fun `C10 holds across the full state space`() {
+        val distributions = listOf(
+            listOf(2024),
+            listOf(2019, 2026),
+            (2019..2026).toList(),
+        )
+        val supplies = listOf(1, 3, 7, 40, 400)
+        var cases = 0
+        for (portrait in listOf(false, true)) {
+            for (template in CollageLayout.forPanel(portrait)) {
+                for (years in distributions) {
+                    for (n in supplies) {
+                        for (era in listOf(false, true)) {
+                            for (otd in listOf(false, true)) {
+                                for (rec in listOf(false, true)) {
+                                    val items = (1..n).mapIndexed { i, _ ->
+                                        item("p$i", years[i % years.size], portrait = i % 3 == 0)
+                                    }
+                                    val picks = fill(
+                                        items, template.slots,
+                                        CollageSelector.Config(era, otd, rec), rotation = cases,
+                                    )
+                                    assertEquals(
+                                        "${template.name} n=$n era=$era otd=$otd rec=$rec",
+                                        template.slots.size, picks.size,
+                                    )
+                                    if (n >= template.slots.size) {
+                                        assertEquals(
+                                            "${template.name} n=$n duplicated with ample supply",
+                                            picks.size, picks.map { it.id }.toSet().size,
+                                        )
+                                    }
+                                    cases++
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assertTrue("expected broad coverage", cases > 500)
+    }
+
+    @Test
     fun `buckets are damped, not uniform`() {
         val w = CollageSelector.bucketWeights(listOf(2019 to 10, 2026 to 1000))
         assertTrue("2026 must outweigh 2019", w.getValue(2026) > w.getValue(2019))
