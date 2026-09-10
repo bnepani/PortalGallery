@@ -98,6 +98,14 @@ class PhotoStore(context: Context) {
 
     fun hasPhoto(id: String): Boolean = existingFile(id) != null
 
+    /**
+     * Removes one item's bytes. Used to undo the writes of a pass that aborted mid-flight —
+     * a thumbnail left behind by an aborted sync is invisible to the next one, because
+     * [hasPhoto] excludes it from the download set and the resolution gate never sees it again.
+     */
+    fun deletePhoto(id: String, isVideo: Boolean = false): Boolean =
+        fileFor(id, isVideo).let { it.exists() && it.delete() }
+
     /** Removes files no longer referenced. Only safe to call when no pass is in flight. */
     fun prune(keepIds: Set<String>): Int =
         photosDir.listFiles()

@@ -12,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -122,11 +123,14 @@ class AlbumSync(private val store: PhotoStore) {
         Log.i(TAG, "sync: ${wanted.size} in album, ${missing.size} to download")
 
         // Mutated from CONCURRENCY coroutines at once. `failures++` on a plain Int is a
-        // read-modify-write and could overwrite the abort flag, defeating the resolution gate.
+        // read-modify-write, so counts would be lost and `added` would over-report.
         val done = AtomicInteger(0)
         val failures = AtomicInteger(0)
         val resolutionChecked = AtomicBoolean(false)
-        val aborted = AtomicBoolean(false)
+        val resolutionGateFailed = AtomicBoolean(false)
+
+        /** What this pass put on disk, so an abort can take it back off again. */
+        val writtenThisPass = ConcurrentLinkedQueue<Pair<String, Boolean>>()
 
         coroutineScope {
             missing.entries.chunked(CONCURRENCY).forEach { chunk ->
@@ -156,21 +160,46 @@ class AlbumSync(private val store: PhotoStore) {
                             if (!photo.isVideo && resolutionChecked.compareAndSet(false, true)) {
                                 if (!isPlausiblePhoto(bytes)) {
                                     Log.e(TAG, "resolution gate FAILED — got a thumbnail, aborting sync")
-                                    aborted.set(true)
+                                    resolutionGateFailed.set(true)
+                                    // Progress still ticks on the way out, as it does on
+                                    // every other exit from this coroutine. Skipping it
+                                    // left the first-sync counter frozen one short of
+                                    // its total while the gate tore the pass down.
+                                    onProgress(done.incrementAndGet(), missing.size)
                                     return@async
                                 }
                             }
-                            store.writePhoto(id, bytes, photo.isVideo)
+                            // A write can fail on a full disk or a failed rename. Unguarded,
+                            // that exception escapes async -> coroutineScope -> sync() and
+                            // lands in refreshLoop()'s bare lifecycleScope.launch, which has
+                            // no handler — so an ENOSPC would crash the frame rather than
+                            // skipping one photo. Counted as a failure and retried next sync,
+                            // exactly like a failed download.
+                            val stored = runCatching { store.writePhoto(id, bytes, photo.isVideo) }
+                            if (stored.isFailure) {
+                                Log.e(TAG, "could not write $id: ${stored.exceptionOrNull()?.message}")
+                                failures.incrementAndGet()
+                            } else {
+                                writtenThisPass.add(id to photo.isVideo)
+                            }
                         }
                         onProgress(done.incrementAndGet(), missing.size)
                     }
                 }.awaitAll()
 
-                if (aborted.get()) return@coroutineScope
+                if (resolutionGateFailed.get()) return@coroutineScope
             }
         }
 
-        if (aborted.get()) {
+        if (resolutionGateFailed.get()) {
+            // Delete this pass's writes before returning. Siblings of the coroutine that
+            // failed the gate had already written their bytes — thumbnails, by definition,
+            // since they came from the same degraded URLs. Left on disk they are excluded
+            // from `missing` on every later sync by hasPhoto(), so the gate never re-examines
+            // them, and once nothing is left to download the sync succeeds and indexes them
+            // as full-resolution photos.
+            val removed = writtenThisPass.count { (id, isVideo) -> store.deletePhoto(id, isVideo) }
+            Log.w(TAG, "gate aborted — removed $removed file(s) written before the verdict")
             return@withContext Result.Failure("resolution gate failed — refusing to index thumbnails")
         }
 
@@ -210,7 +239,7 @@ class AlbumSync(private val store: PhotoStore) {
         Result.Success(
             albums = outcomes,
             total = entries.size,
-            added = missing.size - failures.get().coerceAtMost(missing.size),
+            added = missing.size - failures.get(),
             pruned = pruned,
             bytes = store.totalBytes(),
         )

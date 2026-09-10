@@ -807,6 +807,11 @@ class SlideshowActivity : AppCompatActivity() {
      */
     private fun restartWatchdog() {
         handler.removeCallbacks(watchdogRunnable)
+        // Remove first, then bail while asleep — the same shape as scheduleNext(). Without
+        // this, a first sync landing during quiet hours re-posts the loop that enterSleep()
+        // had just removed: loadFromDiskThenSync() suspends on the disk read, so its
+        // restartWatchdog() runs after onCreate has already put the frame to sleep.
+        if (isAsleep) return
         handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
     }
 
