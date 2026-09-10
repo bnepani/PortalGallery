@@ -58,7 +58,10 @@ object CollageLayout {
                 }
             },
         ),
-        // A 960x1080 hero beside four 480x540 cells.
+        // A 960x1080 hero beside four 480x540 cells. Every slot here is portrait, the
+        // small ones only just (480x540) — quartering the right half of a 16:9 panel
+        // tips each cell past square. Tagging them landscape by eye would hand them
+        // photos that letterbox.
         Template(
             "hero-left",
             listOf(Slot(0f, 0f, 0.5f, 1f, wantPortrait = true)) +
@@ -67,7 +70,7 @@ object CollageLayout {
                         Slot(
                             0.5f + col * 0.25f, row * 0.5f,
                             0.5f + (col + 1) * 0.25f, (row + 1) * 0.5f,
-                            wantPortrait = false,
+                            wantPortrait = true,
                         )
                     }
                 },
