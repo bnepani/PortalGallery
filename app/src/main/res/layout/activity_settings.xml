@@ -187,6 +187,94 @@
             android:textColor="#999999"
             android:textSize="18sp" />
 
+        <!-- Collage -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_collage" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_collage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_collage_enable"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/tv_collage_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#AAAAAA"
+            android:textSize="20sp" />
+
+        <TextView
+            android:id="@+id/tv_collage_swap_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_collage_swap" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_collage_swap"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="0.5"
+            android:valueFrom="1"
+            android:valueTo="15" />
+
+        <TextView
+            android:id="@+id/tv_hero_label"
+            style="@style/SettingsHeading"
+            android:text="@string/settings_hero" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/slider_hero"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:stepSize="1"
+            android:valueFrom="1"
+            android:valueTo="30" />
+
+        <!-- Curation -->
+        <TextView
+            style="@style/SettingsHeading"
+            android:text="@string/settings_curation" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_era_mix"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_curation_era"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_on_this_day"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_curation_otd"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/sw_recency"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/settings_curation_recency"
+            android:textColor="#FFFFFF"
+            android:textSize="26sp" />
+
+        <TextView
+            android:id="@+id/tv_curation_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#999999"
+            android:textSize="18sp" />
+
         <!-- Presence -->
         <TextView
             style="@style/SettingsHeading"

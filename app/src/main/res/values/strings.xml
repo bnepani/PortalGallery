@@ -26,6 +26,14 @@
     <string name="settings_volume">Volume</string>
     <string name="settings_weekday">Day of the week</string>
     <string name="settings_weekday_enable">Show only photos taken on today\'s weekday</string>
+    <string name="settings_collage">Collage</string>
+    <string name="settings_collage_enable">Show several photos at once</string>
+    <string name="settings_collage_swap">Tile changes every</string>
+    <string name="settings_hero">Full-screen photo every</string>
+    <string name="settings_curation">What the collage shows</string>
+    <string name="settings_curation_era">Mix years — each grid spans several</string>
+    <string name="settings_curation_otd">On this day — photos from today\'s date in past years</string>
+    <string name="settings_curation_recency">Keep a slot for newly added photos</string>
     <string name="settings_presence">Presence detection</string>
     <string name="settings_presence_enable">Wake when someone is in the room</string>
     <string name="settings_presence_explain">Uses the camera to detect a person. Everything is processed on this device — no image is saved or sent anywhere. Closing the privacy shutter turns this off and the frame falls back to the quiet-hours schedule.</string>
