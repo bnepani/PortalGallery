@@ -82,11 +82,25 @@ object CollageSelector {
     /**
      * Slot share per year bucket, damped by sqrt of bucket size.
      *
-     * **This is a product choice, stated.** A family archive is not uniform: 2026 may hold
-     * 6,000 photos and 2019 four hundred. Strict one-slot-per-year would give 2019 16.7%
-     * of screen time for 2% of the archive, making a 2019 photo recur ~15x as often as a
-     * 2026 one. Raw proportional allocation goes the other way and buries the old years.
-     * sqrt sits between: old years stay clearly visible, recent years still dominate.
+     * **This is a product choice, and the numbers behind it are now measured rather than
+     * assumed.** An earlier version of this comment argued from a guess — that a family
+     * album accumulates, so the newest year dominates and old years need protecting from
+     * proportional allocation. Crawling the real album showed the opposite:
+     *
+     * | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+     * |------|------|------|------|------|------|------|------|
+     * | 3657 | 3843 | 3280 | 2916 | 1297 | 3189 | 1134 |  658 |
+     *
+     * 2019 is the second-largest year at 18% of the archive; 2026 is the smallest at 3.3%.
+     * People photograph less over time here, not more.
+     *
+     * The mechanism survives the correction because it was never really about which end
+     * was heavy — sqrt sits between proportional and uniform whichever way the archive
+     * leans, pulling every bucket toward the middle. On these numbers it lifts 2026 from a
+     * 3.3% proportional share to 6.7% and trims 2019 from 18% to 16%, so the newest photos
+     * get roughly twice the screen time raw proportion would give them and the oldest are
+     * barely touched. That is the outcome worth having; it just arrives from the opposite
+     * direction to the one first written down.
      */
     fun bucketWeights(sizes: List<Pair<Int, Int>>): Map<Int, Double> {
         val raw = sizes.associate { (year, n) -> year to sqrt(n.toDouble()) }

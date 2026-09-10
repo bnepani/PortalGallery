@@ -622,6 +622,53 @@ reasoning with invented numbers and must be rewritten against these measured one
 
 ---
 
+## 11d. Phase 2 build status, 2026-09-10
+
+Everything is implemented and unit-tested. **Nothing has run on the device yet** — the
+Portal went offline before the deploy, so the whole of Phase 2 is compile-and-reason plus
+149 unit tests, exactly the position Phase 1 was in before its own device run.
+
+| Piece | State |
+|---|---|
+| §5.2 probe | ✅ passed — 19,974 items, 67 pages, 2 design corrections |
+| `AlbumPager` | ✅ 11 tests over two committed response captures |
+| `AlbumIndex` | ✅ 11 tests; 20,000 entries = 4.0 MB, 60 ms read |
+| `CrawlGuard` (C11) | ✅ 15 tests, including the reviewers' doomsday scenario |
+| `ResidentSelector` | ✅ 13 tests |
+| `AlbumSync` rework | ✅ compiles, wired, untested on hardware |
+| Migration (§11) | ✅ no special path needed — see below |
+| On-device verification | ❌ **outstanding** |
+
+### Migration needs no code
+
+§11 anticipated an upgrade path. There isn't one to write, and the reason is worth
+recording: on first run the index is simply absent, `CrawlGuard` returns
+`Accept(mayPrune = true)` for a first complete crawl, and the resident sample keeps ~1,500
+items where the old prune kept only the visible 300. **The upgrade strictly increases what
+survives**, so C9 holds without special handling. `PhotoStore.Entry` is untouched, so the
+existing index deserialises as it always did.
+
+### Two deliberate departures from this design
+
+1. **An incomplete crawl is merged, not discarded** (§5.4 said discard). The guard has
+   already forbidden pruning, so add-only merging protects identically and is strictly more
+   useful — an album that reliably times out at page 40 would otherwise never contribute
+   another photograph.
+2. **Pruning runs before indexing.** The other order writes a store index listing files the
+   prune then deletes. `PhotoStore.load()` filters missing files so it self-heals, but a
+   sync reporting a total it has just invalidated makes a later bug harder to read.
+
+### What the device run still has to establish
+
+- A 67-page crawl against the live album from the app, not from a Python script.
+- The first-run download of ~1,200 new photos (~360 MB) and how long it actually takes.
+- That the collage draws from the full archive rather than the recent window — the point
+  of the whole phase.
+- Memory and stability with a 20,000-entry index loaded each sync.
+- That `mayPrune` behaves on a real partial failure, which no unit test can stage.
+
+---
+
 ## 12. Open questions
 
 - [ ] **Does the `snAcKc` RPC work?** Gate on §5.2.
