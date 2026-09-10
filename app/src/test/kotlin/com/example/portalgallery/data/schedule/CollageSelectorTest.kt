@@ -48,7 +48,6 @@ class CollageSelectorTest {
         assertEquals(slots.size, picks.size)
     }
 
-    @org.junit.Ignore("placeholder fill; real selection lands in Step 12")
     @Test
     fun `no duplicates within one grid when there is ample supply`() {
         val picks = fill((1..50).map { item("p$it", 2020 + it % 6) })
@@ -238,6 +237,28 @@ class CollageSelectorTest {
         val weights = mapOf(2024 to 0.5, 2025 to 0.5)
         assertEquals(4, CollageSelector.allocate(weights, slotCount = 4, rotation = -7).size)
         assertEquals(4, CollageSelector.allocate(weights, slotCount = 4, rotation = Int.MIN_VALUE).size)
+    }
+
+    @Test
+    fun `all-zero weights round robin rather than stacking one era`() {
+        // bucketWeights returns all zeros when every bucket it is handed is empty. fill
+        // cannot reach that today, but Step 12 filters the pools by orientation and a
+        // year can lose every photo there, so pin the behaviour now.
+        //
+        // It is sane, not accidental: zero quota means no bucket ever accrues credit, so
+        // the 1.0 charged for a seat is the only thing separating them and each seat goes
+        // to whichever bucket has paid least. Six slots over three eras is two apiece,
+        // which beats the alternative of one era taking the whole grid.
+        val weights = mapOf(2019 to 0.0, 2024 to 0.0, 2026 to 0.0)
+        (0 until 4).forEach { r ->
+            val picks = CollageSelector.allocate(weights, slotCount = 6, rotation = r)
+            assertEquals(6, picks.size)
+            assertEquals(
+                "rotation $r must seat every era twice, got $picks",
+                mapOf(2019 to 2, 2024 to 2, 2026 to 2),
+                picks.groupingBy { it }.eachCount(),
+            )
+        }
     }
 
     @Test

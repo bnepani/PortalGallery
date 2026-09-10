@@ -80,10 +80,15 @@ object CollageSelector {
      *
      * The bound exists so the cost cannot grow with a counter that ticks every dwell for
      * months; resetting the ledger makes the sequence repeat rather than degrade. It has
-     * to outlast the thinnest bucket's wait, and that is what fixes the size: across the
-     * reference 20,000-photo archive the roots sum to roughly 400, so a bucket holding a
-     * single photo has a quota near 6/400 and waits some 67 grids for its seat. 512
-     * leaves headroom for an archive around fifty times that size.
+     * to outlast the thinnest bucket's wait, and that is what fixes the size. Across the
+     * reference 20,000-photo archive the roots sum to about 375, so a bucket holding a
+     * single photo has a quota of 0.016 seats per six-slot grid — and it is seated at
+     * rotation 12. Note that this is far sooner than the 1/quota ≈ 63 grids the quota
+     * alone suggests: 1/quota is how long a bucket would wait if it had to out-credit
+     * buckets sitting at zero, but the ledger charges a full seat to every bucket that
+     * wins one, so the field it has to beat is drawn down below zero and meets the thin
+     * bucket's slowly accruing credit part-way. At fifty times that archive the quota
+     * falls to 0.0023 and the wait stretches to 61 grids, so 512 leaves ample headroom.
      */
     private const val ROTATION_CYCLE = 512
 
@@ -92,18 +97,27 @@ object CollageSelector {
      *
      * Apportionment is largest-remainder: a bucket's quota is its weight times [slotCount],
      * it is seated floor(quota) times outright, and the seats left over go to the largest
-     * fractional parts. Eight eras across six slots puts every quota below one, so *every*
-     * seat is a leftover seat — and a stateless pass then ranks the same eras first in
-     * every grid, leaving two years permanently invisible. That is the exact failure this
-     * function exists to prevent, so rotating the finished list is not enough either: the
-     * buckets that were ranked last stay at zero seats however the list is turned.
+     * fractional parts. Eight eras across six slots pushes most quotas below one — though
+     * not every one: sqrt damping still leaves a dominant recent year above the 1/6 that
+     * buys a seat outright — so nearly every seat is a leftover seat, and a stateless
+     * pass then ranks the same eras first in every grid, leaving two years permanently
+     * invisible. That is the exact failure this function exists to prevent, so rotating
+     * the finished list is not enough either: the buckets that were ranked last stay at
+     * zero seats however the list is turned.
      *
      * The fix is to carry the remainders across grids. A bucket that loses a leftover seat
      * keeps the fraction it was owed and starts the next grid ahead of the buckets that
      * won, so the winners rotate on their own and the long-run share still tracks the
      * weights. [rotation] chooses how many grids of that ledger to replay; grid 0 is a
-     * plain largest-remainder pass. Ties break towards the older year, which only decides
-     * the very first grid — after that the ledger has separated everything.
+     * plain largest-remainder pass.
+     *
+     * Ties break towards the older year — `>` keeps the incumbent, and `years` is sorted
+     * ascending. That is not a one-off. Under uniform weights, the case this function was
+     * written for, the credits move in lockstep and exact ties recur in every grid: eight
+     * equal eras over three slots tie all eight at grid 0, six of them at 0.125 by grid 2.
+     * So the tie-break is not a seed the ledger then overwrites, it is the rule driving a
+     * permanent round robin through the years in ascending order, which is precisely the
+     * even spread wanted here. The credit ledger takes over only as the weights separate.
      *
      * The seats leave that pass in descending-credit order, and a caller that maps them
      * straight onto its slots therefore hands slot 0 to the heaviest era in *every* grid.
