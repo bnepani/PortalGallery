@@ -92,6 +92,26 @@ object SharedAlbumParser {
         val data = extractDsRaw(html, "ds:1")
             ?.let { runCatching { JsonParser.parseString(it).asJsonArray }.getOrNull() }
             ?: return null
+        val (photos, token) = decodePayload(data) ?: return null
+        return Result(photos, title, token, Tier.STRUCTURED)
+    }
+
+    /**
+     * Decodes a `ds:1` payload — `[null, [entries…], token, …]` — into photos and the
+     * continuation token.
+     *
+     * Shared with [AlbumPager], which receives the *identical* array shape back from the
+     * `snAcKc` RPC rather than from the page. Extracting this was the point: the design
+     * claimed entry decoding was already reusable, and it was not — the logic lived inside
+     * a private function anchored on the HTML string `key: 'ds:1'`, with no seam that took
+     * a parsed array. Two copies of this decoding would be two things to keep in step with
+     * an undocumented format, and only one of them would have the golden test.
+     *
+     * Returns null when the array is not shaped like a payload at all. An empty photo list
+     * is a legitimate return — a caller must treat that as "read nothing", never as "the
+     * album is empty".
+     */
+    internal fun decodePayload(data: JsonArray): Pair<List<Photo>, String?>? {
         if (data.size() < 2 || !data[1].isJsonArray) return null
 
         val photos = data[1].asJsonArray.mapNotNull { element ->
@@ -117,7 +137,7 @@ object SharedAlbumParser {
             data[2].takeIf { it.isJsonPrimitive }?.asString
         }.getOrNull()
 
-        return Result(photos, title, token, Tier.STRUCTURED)
+        return photos to token
     }
 
     /** Pulls the raw `data:` array text out of an AF_initDataCallback block by ds key. */
