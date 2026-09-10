@@ -155,6 +155,51 @@ object CollageSelector {
         return picks.toList().shuffled(Random(rotation))
     }
 
+    /**
+     * How fresh a photo is, 1.0 the moment it lands and 0.0 once [RECENT_WINDOW_MS] has
+     * passed. Measured from the end of [today] rather than its start so a photo added this
+     * afternoon is not given a negative age by a clock the frame reads only to day
+     * precision; a genuinely future [addedMs] — a device whose clock ran ahead before NTP
+     * corrected it — clamps to 1.0 rather than wrapping.
+     *
+     * An [addedMs] of 0 means the index predates the column and cannot be dated, so it
+     * scores 0: unknown is treated as old, which is the safe direction. Guessing "new"
+     * would hand every unsynced photo the reserved slot below.
+     */
+    private fun freshness(addedMs: Long, nowMs: Long): Double {
+        if (addedMs <= 0L) return 0.0
+        return ((RECENT_WINDOW_MS - (nowMs - addedMs)).toDouble() / RECENT_WINDOW_MS)
+            .coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Which slot, if any, is held back for photos added in the last [RECENT_WINDOW_MS].
+     * -1 when the reservation is off or nothing qualifies.
+     *
+     * **Why a slot is reserved at all.** Era mix and recency pull against each other, and
+     * era mix wins on volume unless it is stopped structurally. Six tiles swapping every
+     * 20s is 1,080 tile renders an hour. Split evenly across six eras — near enough for
+     * this estimate; sqrt damping tilts it towards the recent ones — the newest bucket
+     * draws 180 of them, and against the ~6,000 photos a recent year holds in the
+     * reference archive that is one appearance per specific new photo every ~33 hours.
+     * The frame today — 300 photos, one at a time, 8s each, so 450 renders an hour —
+     * shows a given photo every ~40 minutes. Era mix on by default would therefore make a
+     * new photo roughly 50x less visible than it is now, and "photos the family adds
+     * actually show up" is the requirement the frame exists for. Reserving a slot makes
+     * the guarantee structural instead of probabilistic: the recent pool gets one tile in
+     * every grid — 180 renders an hour — however the eras are apportioned.
+     *
+     * **Why the position rotates.** Slot 0 is the obvious pick and the wrong one. A fixed
+     * position means new arrivals are always top-left, which is the same defect [allocate]
+     * shuffles its seats to avoid — one category pinned to one position for the life of
+     * the frame, read by anyone watching as a fixed spatial gradient rather than as a
+     * grid. Keying the reservation off [rotation] walks it across the grid instead, and
+     * consecutive rotations visit every position before repeating. floorMod for the reason
+     * given on [ROTATION_CYCLE]: the counter wraps negative eventually.
+     */
+    private fun reservedSlot(recentCount: Int, slotCount: Int, rotation: Int): Int =
+        if (recentCount == 0) -1 else Math.floorMod(rotation, slotCount)
+
     fun <T> fill(
         candidates: List<T>,
         slots: List<CollageLayout.Slot>,
@@ -169,28 +214,33 @@ object CollageSelector {
     ): List<T> {
         if (candidates.isEmpty() || slots.isEmpty()) return emptyList()
 
-        // Steps 11-12 add the on-this-day, recency and orientation stages. What runs today
-        // is the two ends of the cascade: the era target, then the terminal repeat.
-        //
-        // Bucketed by index rather than by item, so the pools double as the draw pools and
-        // "already used in this grid" stays a question about positions, not about whether
-        // two candidates happen to be equal.
+        // Indices, not items, throughout: the pools double as the draw pools and "already
+        // used in this grid" stays a question about positions, not about whether two
+        // candidates happen to be equal.
+        val all = candidates.indices.toList()
+        val nowMs = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val fresh = DoubleArray(candidates.size) { freshness(addedMs(candidates[it]), nowMs) }
+
+        val recent = if (config.recency) all.filter { fresh[it] > 0.0 } else emptyList()
+        val reserved = reservedSlot(recent.size, slots.size, rotation)
+
+        // The reserved slot is excluded from era stratification: it is held for the recent
+        // pool, so apportioning a year bucket to it would only be overridden.
+        val open = slots.indices.filter { it != reserved }
         val pools: Map<Int, List<Int>> =
-            if (config.eraMix) {
-                bucketByYear(candidates.indices.toList(), zone) { captureMs(candidates[it]) }
-            } else {
-                emptyMap()
-            }
+            if (config.eraMix) bucketByYear(all, zone) { captureMs(candidates[it]) } else emptyMap()
         val targets =
             if (pools.isEmpty()) {
                 emptyList()
             } else {
                 val weights = bucketWeights(pools.map { (year, idx) -> year to idx.size })
-                allocate(weights, slots.size, rotation)
+                allocate(weights, open.size, rotation)
             }
+        val target = HashMap<Int, List<Int>>(open.size)
+        open.forEachIndexed { k, s -> targets.getOrNull(k)?.let { target[s] = pools.getValue(it) } }
 
-        val all = candidates.indices.toList()
         val used = BooleanArray(candidates.size)
+        val chosen = IntArray(slots.size) { -1 }
 
         fun draw(pool: List<Int>?, freshOnly: Boolean): Int? {
             if (pool.isNullOrEmpty()) return null
@@ -198,8 +248,22 @@ object CollageSelector {
             return if (eligible.isEmpty()) null else eligible[random.nextInt(eligible.size)]
         }
 
-        return slots.indices.map { s ->
-            val era = targets.getOrNull(s)?.let { pools[it] }
+        if (reserved >= 0) {
+            // Prefer a recent photo shaped for the slot, but take one of the wrong shape
+            // over giving the reservation up: the point is that the new photo is seen.
+            val want = slots[reserved].wantPortrait
+            val fits = recent.filter { isPortrait(candidates[it]) == want }
+            // Nothing is used yet, so `recent` — non-empty whenever reserved >= 0 — always
+            // yields; the elvis is the orientation relaxation, not a null guard.
+            val idx = draw(fits, freshOnly = true) ?: recent[random.nextInt(recent.size)]
+            used[idx] = true
+            chosen[reserved] = idx
+        }
+
+        // Step 12 adds the on-this-day, orientation and weighting stages. What runs today
+        // is the two ends of the cascade: the era target, then the terminal repeat.
+        for (s in open) {
+            val era = target[s]
             val idx = draw(era, freshOnly = true)
                 ?: draw(all, freshOnly = true)
                 // Nothing unused is left. Repeat, preferring the era the slot was owed,
@@ -207,7 +271,9 @@ object CollageSelector {
                 ?: draw(era, freshOnly = false)
                 ?: all[random.nextInt(all.size)]
             used[idx] = true
-            candidates[idx]
+            chosen[s] = idx
         }
+
+        return chosen.map { candidates[it] }
     }
 }

@@ -70,6 +70,35 @@ class CollageSelectorTest {
     }
 
     @Test
+    fun `a freshly added photo appears in every grid when recency is on`() {
+        val old = (1..500).map { item("old$it", 2020 + it % 5, addedYear = 2020 + it % 5) }
+        val fresh = Item("FRESH", false, ms(2026, 9, 8), ms(2026, 9, 8))
+        val slots = CollageLayout.forPanel(false).first().slots
+
+        repeat(5) { r ->
+            val picks = fill(
+                old + fresh, slots,
+                CollageSelector.Config(eraMix = true, recency = true), rotation = r,
+            )
+            assertTrue("grid $r missed the new arrival", picks.any { it.id == "FRESH" })
+        }
+    }
+
+    @Test
+    fun `recency off means no reserved slot`() {
+        val old = (1..500).map { item("old$it", 2021) }
+        val fresh = Item("FRESH", false, ms(2026, 9, 8), ms(2026, 9, 8))
+        val slots = CollageLayout.forPanel(false).first().slots
+        val grids = (0 until 10).map {
+            fill(old + fresh, slots, CollageSelector.Config(eraMix = true, recency = false), rotation = it)
+        }
+        assertTrue(
+            "without recency, FRESH should not be in every grid",
+            grids.any { g -> g.none { it.id == "FRESH" } },
+        )
+    }
+
+    @Test
     fun `buckets are damped, not uniform`() {
         val w = CollageSelector.bucketWeights(listOf(2019 to 10, 2026 to 1000))
         assertTrue("2026 must outweigh 2019", w.getValue(2026) > w.getValue(2019))
