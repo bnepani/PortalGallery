@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DataSource
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.engine.GlideException
 import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.target.Target
@@ -651,6 +652,9 @@ class SlideshowActivity : AppCompatActivity() {
             .load(photo.file)
             // Our own transition runs below; Glide's would fight it.
             .dontAnimate()
+            // The file is already on our disk. AUTOMATIC would re-encode a second copy into
+            // Glide's 250MB LRU — pure churn on a device that runs for months.
+            .diskCacheStrategy(DiskCacheStrategy.NONE)
             .listener(object : RequestListener<Drawable> {
                 override fun onLoadFailed(
                     e: GlideException?,
