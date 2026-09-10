@@ -99,6 +99,58 @@ class CollageSelectorTest {
     }
 
     @Test
+    fun `orientation is honoured when supply allows`() {
+        val portraitTemplate = CollageLayout.forPanel(false).first { t -> t.slots.all { it.wantPortrait } }
+        val mixed = (1..30).map { item("p$it", 2024, portrait = it % 2 == 0) }
+        val picks = fill(mixed, portraitTemplate.slots, CollageSelector.Config(eraMix = false))
+        assertTrue("every slot wants portrait and supply exists", picks.all { it.portrait })
+    }
+
+    @Test
+    fun `era relaxes before orientation`() {
+        // 2019 has exactly one resident photo and it is the wrong shape for a portrait slot.
+        // Correct behaviour: take a portrait photo from another era, NOT a landscape from 2019.
+        val portraitTemplate = CollageLayout.forPanel(false).first { t -> t.slots.all { it.wantPortrait } }
+        val items = listOf(item("old-landscape", 2019, portrait = false)) +
+            (1..30).map { item("new-portrait$it", 2025, portrait = true) }
+        val picks = fill(items, portraitTemplate.slots, CollageSelector.Config(eraMix = true))
+        assertTrue("orientation must survive; era may not", picks.all { it.portrait })
+    }
+
+    @Test
+    fun `on this day boosts matching photos and relaxes when nothing matches`() {
+        val slots = CollageLayout.forPanel(false).first().slots
+        val anniversary = (1..10).map {
+            Item("ANN$it", false, ms(2021, 9, 9), ms(2021, 9, 9))
+        }
+        val other = (1..200).map { item("other$it", 2023) }
+        val hits = fill(
+            anniversary + other, slots,
+            CollageSelector.Config(eraMix = false, onThisDay = true),
+        )
+        assertTrue("anniversary photos should dominate", hits.count { it.id.startsWith("ANN") } >= 1)
+
+        // Nothing matches today -> must still fill every slot.
+        val nonePicks = fill(other, slots, CollageSelector.Config(eraMix = false, onThisDay = true))
+        assertEquals(slots.size, nonePicks.size)
+    }
+
+    @Test
+    fun `most constrained slot is filled first`() {
+        // One portrait photo, one portrait slot among landscape ones. Left-to-right greedy
+        // assignment can consume it on slot 0; most-constrained-first must not.
+        val slots = listOf(
+            CollageLayout.Slot(0f, 0f, 0.5f, 0.5f, wantPortrait = false),
+            CollageLayout.Slot(0.5f, 0f, 1f, 1f, wantPortrait = true),
+            CollageLayout.Slot(0f, 0.5f, 0.5f, 1f, wantPortrait = false),
+        )
+        val items = listOf(item("theOnlyPortrait", 2024, portrait = true)) +
+            (1..20).map { item("land$it", 2024, portrait = false) }
+        val picks = fill(items, slots, CollageSelector.Config(eraMix = false))
+        assertEquals("theOnlyPortrait", picks[1].id)
+    }
+
+    @Test
     fun `buckets are damped, not uniform`() {
         val w = CollageSelector.bucketWeights(listOf(2019 to 10, 2026 to 1000))
         assertTrue("2026 must outweigh 2019", w.getValue(2026) > w.getValue(2019))

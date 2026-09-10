@@ -48,6 +48,26 @@ object CollageSelector {
     /** Photos added within this window are "new" for recency purposes. */
     private const val RECENT_WINDOW_MS = 21L * 24 * 60 * 60 * 1000
 
+    /**
+     * How much more likely an anniversary photo is to win a draw than an ordinary one.
+     *
+     * A multiplier rather than a filter, because on-this-day has to relax like everything
+     * else: most days match nothing, and 25x nothing is still nothing, so the draw simply
+     * carries on. It is deliberately large. Anniversaries are a thin slice of any archive
+     * — ten photos in a two-hundred-photo library is generous — and at 25x that slice
+     * takes 250 of 450 weight, so it wins a little over half the tiles it competes for.
+     * A gentler multiplier would leave the feature invisible on the day it is meant for.
+     */
+    private const val ON_THIS_DAY_BOOST = 25.0
+
+    /**
+     * Extra weight a brand-new photo carries, decaying linearly to none over
+     * [RECENT_WINDOW_MS]. Modest on purpose: the visibility guarantee is the reserved slot,
+     * which is structural, and this only tilts the ordinary slots so a batch that arrived
+     * yesterday keeps a little momentum after the reservation has moved on to the next one.
+     */
+    private const val RECENCY_BOOST = 4.0
+
     /** Bucket key for photos whose capture time is missing. Cannot collide with a real year. */
     const val UNKNOWN_YEAR = -1
 
@@ -239,41 +259,100 @@ object CollageSelector {
         val target = HashMap<Int, List<Int>>(open.size)
         open.forEachIndexed { k, s -> targets.getOrNull(k)?.let { target[s] = pools.getValue(it) } }
 
+        val weight = DoubleArray(candidates.size) { i ->
+            var w = 1.0
+            if (config.onThisDay && isAnniversary(captureMs(candidates[i]), today, zone)) {
+                w *= ON_THIS_DAY_BOOST
+            }
+            if (config.recency) w *= 1.0 + RECENCY_BOOST * fresh[i]
+            w
+        }
+
         val used = BooleanArray(candidates.size)
         val chosen = IntArray(slots.size) { -1 }
 
-        fun draw(pool: List<Int>?, freshOnly: Boolean): Int? {
-            if (pool.isNullOrEmpty()) return null
-            val eligible = if (freshOnly) pool.filter { !used[it] } else pool
-            return if (eligible.isEmpty()) null else eligible[random.nextInt(eligible.size)]
+        fun draw(pool: List<Int>): Int {
+            // Every weight is >= 1.0, so the total is always positive and the walk always
+            // lands; `last()` catches the float rounding case where it lands a hair short.
+            var r = random.nextDouble() * pool.sumOf { weight[it] }
+            for (i in pool) {
+                r -= weight[i]
+                if (r <= 0.0) return i
+            }
+            return pool.last()
         }
+
+        fun free(pool: List<Int>): List<Int> = pool.filter { !used[it] }
+        fun fits(pool: List<Int>, want: Boolean): List<Int> =
+            pool.filter { isPortrait(candidates[it]) == want }
 
         if (reserved >= 0) {
             // Prefer a recent photo shaped for the slot, but take one of the wrong shape
             // over giving the reservation up: the point is that the new photo is seen.
-            val want = slots[reserved].wantPortrait
-            val fits = recent.filter { isPortrait(candidates[it]) == want }
-            // Nothing is used yet, so `recent` — non-empty whenever reserved >= 0 — always
-            // yields; the elvis is the orientation relaxation, not a null guard.
-            val idx = draw(fits, freshOnly = true) ?: recent[random.nextInt(recent.size)]
+            // Nothing is used yet and `recent` is non-empty whenever reserved >= 0, so the
+            // elvis here is the orientation relaxation, not an emptiness guard.
+            val shaped = fits(recent, slots[reserved].wantPortrait)
+            val idx = draw(if (shaped.isEmpty()) recent else shaped)
             used[idx] = true
             chosen[reserved] = idx
         }
 
-        // Step 12 adds the on-this-day, orientation and weighting stages. What runs today
-        // is the two ends of the cascade: the era target, then the terminal repeat.
-        for (s in open) {
-            val era = target[s]
-            val idx = draw(era, freshOnly = true)
-                ?: draw(all, freshOnly = true)
-                // Nothing unused is left. Repeat, preferring the era the slot was owed,
-                // because the alternative is a black tile.
-                ?: draw(era, freshOnly = false)
-                ?: all[random.nextInt(all.size)]
+        // Most-constrained-first: slots are ranked by the size of stage (a) below, their
+        // strictest pool, counted once here rather than recomputed as the grid fills.
+        //
+        // Be precise about what this buys, because it is less than it looks. It cannot
+        // protect orientation: stage (b) relaxes era while holding the shape, so no slot
+        // takes a wrong-shaped photo while a right-shaped one is unused, in any order at
+        // all. What it protects is the era target. Any two slots' stage-(a) pools are
+        // either identical (same bucket and same shape) or disjoint, so slots that can be
+        // served strictly never compete with one another; the only slot that can spoil
+        // another's era target is one whose own stage (a) is empty and which therefore
+        // reaches across the whole library at stage (b).
+        //
+        // Which is why an empty count sorts last, not first. A slot with nothing strictly
+        // eligible is not the constrained one — it has already lost its era target however
+        // early it runs — and running it first only lets it take a photo some other slot
+        // could still have used strictly. sortedBy is stable, so equally constrained slots
+        // keep their natural order and the grid stays reproducible.
+        val order = open.sortedBy { s ->
+            val strict = free(fits(target[s] ?: all, slots[s].wantPortrait)).size
+            if (strict == 0) Int.MAX_VALUE else strict
+        }
+
+        for (s in order) {
+            val want = slots[s].wantPortrait
+            // The slot's era bucket, or the whole library when era mix is off — which
+            // makes stages (a)/(b) and (c)/(d) coincide, exactly as they should when
+            // there is no era target to relax.
+            val bucket = target[s] ?: all
+            val pool = free(fits(bucket, want)).nonEmpty()  // a. era + shape
+                ?: free(fits(all, want)).nonEmpty()         // b. shape, any era
+                ?: free(bucket).nonEmpty()                  // c. era, any shape
+                ?: free(all).nonEmpty()                     // d. anything unused
+                ?: all                                      // e. repeat: the C10 floor
+            val idx = draw(pool)
             used[idx] = true
             chosen[s] = idx
         }
 
+        // Slot order, not selection order: the caller maps this straight onto its tiles.
         return chosen.map { candidates[it] }
     }
+
+    /**
+     * True when [captureMs] falls on today's month and day, in any year including this one.
+     * Read in [zone] for the same reason PhotoSelector.matchesWeekday is: "this day" means
+     * the day the household lived, not the one UTC was having.
+     */
+    private fun isAnniversary(captureMs: Long, today: LocalDate, zone: ZoneId): Boolean {
+        if (captureMs <= 0L) return false
+        val d = Instant.ofEpochMilli(captureMs).atZone(zone).toLocalDate()
+        return d.monthValue == today.monthValue && d.dayOfMonth == today.dayOfMonth
+    }
+
+    /**
+     * Null for an empty pool, so the relax cascade can chain on elvis. Elvis is lazy, which
+     * is the point: a stage is only filtered for if every stricter one came back empty.
+     */
+    private fun List<Int>.nonEmpty(): List<Int>? = takeIf { it.isNotEmpty() }
 }
