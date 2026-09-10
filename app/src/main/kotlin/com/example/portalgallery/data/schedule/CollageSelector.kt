@@ -27,8 +27,10 @@ import kotlin.random.Random
  *     nothing worse.
  *  3. **Orientation** — the slot's [CollageLayout.Slot.wantPortrait] tag, dropped last,
  *     because those tags are the whole reason collage mode exists. On a landscape panel
- *     the full-screen path discards the 56% of the library that is portrait; a portrait
- *     slot is the only way those photographs reach the screen. Filling one with a
+ *     the full-screen path discards every portrait photo — 56% of the committed trip
+ *     fixture, 33% of the live family album measured 2026-09-09, so a large slice either
+ *     way; a portrait slot is the only way those photographs reach the screen. Filling
+ *     one with a
  *     landscape photo — letterboxed into a tall box, or cropped to a strip — hands back
  *     exactly the ground the tags were added to win, so orientation is worth more than
  *     either preference above it.

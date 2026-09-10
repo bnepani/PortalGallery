@@ -10,9 +10,16 @@ package com.example.portalgallery.ui.slideshow
  * Templates are data, deliberately. Procedural packing produces slivers and is hard to
  * assert about; a fixed set can be checked exhaustively — see CollageLayoutTest.
  *
- * [Slot.wantPortrait] is the mechanism that recovers the 56% of the library the
- * whole-screen orientation filter discards: a landscape panel has no use for a portrait
- * photo, but a 640x1080 slot has.
+ * [Slot.wantPortrait] is the mechanism that recovers the photos the whole-screen
+ * orientation filter discards: a landscape panel has no use for a portrait photo, but a
+ * 640x1080 slot has.
+ *
+ * How large that slice is depends on the album, and the two we have measured disagree
+ * sharply — so do not quote a single figure as though it were a property of "the
+ * library". The committed trip-album fixture is 168/300 portrait (56%); the live family
+ * album, sampled over its visible 300 on 2026-09-09, is 100/300 (33%). Portrait is the
+ * majority in one and the minority in the other, which also inverts which templates run
+ * out of supply first.
  */
 object CollageLayout {
 
@@ -44,7 +51,10 @@ object CollageLayout {
      */
     private val LANDSCAPE = listOf(
         // Three 640x1080 columns. The whole reason collage mode exists: three photos per
-        // pass drawn from the 56% the full-screen path throws away.
+        // pass drawn from the portrait stock the full-screen path throws away. Also the
+        // template most exposed to a portrait-poor album — the family album measured 33%
+        // portrait, so three portrait slots can outrun supply where the 56% fixture would
+        // not have.
         Template(
             "thirds-portrait",
             (0 until 3).map { i -> Slot(i / 3f, 0f, (i + 1) / 3f, 1f, wantPortrait = true) },
@@ -87,7 +97,8 @@ object CollageLayout {
             ),
         ),
         // A 1920x648 banner over three 640x432 cells. Every slot is landscape, which keeps
-        // the 44% that the full-screen path already serves in rotation too.
+        // the stock the full-screen path already serves in rotation too — the majority of
+        // the family album, at 67%, and the minority of the trip fixture, at 44%.
         Template(
             "banner-over-thirds",
             listOf(Slot(0f, 0f, 1f, 0.6f, wantPortrait = false)) +
