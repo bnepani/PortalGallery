@@ -188,6 +188,37 @@ class CollageSelectorTest {
     }
 
     @Test
+    fun `no slot position is pinned to a single era`() {
+        // The apportionment pass emits seats in descending-credit order. Mapped straight
+        // onto slots that pins the heaviest era to slot 0 forever — on thirds-portrait, a
+        // permanently recent left column and a permanently old right one. Without the
+        // per-grid permutation slots 0-4 here are 2026 in all 500 grids.
+        val weights = mapOf(2019 to 0.1, 2026 to 0.9)
+        val slotCount = 6
+        val grids = (0 until 500).map {
+            CollageSelector.allocate(weights, slotCount = slotCount, rotation = it)
+        }
+        (0 until slotCount).forEach { s ->
+            val counts = grids.map { it[s] }.groupingBy { it }.eachCount()
+            assertTrue("slot $s never showed the light era", counts.getOrDefault(2019, 0) > 0)
+            val top = counts.values.max()
+            assertTrue("slot $s showed one era $top/500 times", top < 475)
+        }
+    }
+
+    @Test
+    fun `spreading eras across positions leaves the long-run share alone`() {
+        // The permutation moves seats between positions, never between buckets, so the
+        // 9:1 split has to survive it intact.
+        val weights = mapOf(2019 to 0.1, 2026 to 0.9)
+        val counts = (0 until 500)
+            .flatMap { CollageSelector.allocate(weights, slotCount = 6, rotation = it) }
+            .groupingBy { it }.eachCount()
+        assertEquals(3000, counts.values.sum())
+        assertEquals(300.0, counts.getValue(2019).toDouble(), 30.0)
+    }
+
+    @Test
     fun `a bucket too thin to win any single grid is still seated eventually`() {
         // One photo against seven years of 2,857 — the shape of an archive with a stray
         // scanned print in it. Its quota is about 0.016 of a six-slot grid, so it can

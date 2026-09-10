@@ -105,6 +105,17 @@ object CollageSelector {
      * plain largest-remainder pass. Ties break towards the older year, which only decides
      * the very first grid — after that the ledger has separated everything.
      *
+     * The seats leave that pass in descending-credit order, and a caller that maps them
+     * straight onto its slots therefore hands slot 0 to the heaviest era in *every* grid.
+     * Measured over 1,000 six-slot grids at weights 0.1/0.9, slots 0 through 4 drew the
+     * heavy era 100% of the time and only slot 5 ever showed the light one. On
+     * `thirds-portrait` that renders as a permanently recent left column beside a
+     * permanently old right one — a fixed spatial gradient by age. Era mix exists to make
+     * each grid a cross-section of the archive, not to sort it, so the finished list is
+     * shuffled before it is returned. The permutation is seeded from [rotation] alone, so
+     * the result stays reproducible for a given grid; and it moves seats between
+     * positions, never between buckets, so the ledger's long-run share is untouched.
+     *
      * floorMod rather than %, for the same reason as CollageLayout.templateAt: the counter
      * is a plain Int on a frame that runs for months and will eventually wrap negative.
      */
@@ -125,7 +136,9 @@ object CollageSelector {
                 picks[s] = years[best]
             }
         }
-        return picks.toList()
+        // Seeded from rotation, not from the caller's Random: the spread has to hold for
+        // any caller, including tests that reuse one fixed seed across every grid.
+        return picks.toList().shuffled(Random(rotation))
     }
 
     fun <T> fill(
