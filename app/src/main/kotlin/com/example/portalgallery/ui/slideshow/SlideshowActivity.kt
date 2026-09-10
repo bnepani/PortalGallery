@@ -256,7 +256,7 @@ class SlideshowActivity : AppCompatActivity() {
                 binding.tvStatus.visibility = View.GONE
                 show(0)
                 scheduleNext()
-                handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
+                restartWatchdog()
             } else {
                 binding.tvStatus.setText(
                     if (albumUrls().isEmpty()) R.string.status_no_album
@@ -338,7 +338,7 @@ class SlideshowActivity : AppCompatActivity() {
             binding.tvStatus.visibility = View.GONE
             show(currentIndex)
             scheduleNext()
-            handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
+            restartWatchdog()
         }
     }
 
@@ -516,7 +516,7 @@ class SlideshowActivity : AppCompatActivity() {
         if (photos.isNotEmpty()) {
             show(currentIndex)
             scheduleNext()
-            handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
+            restartWatchdog()
         }
     }
 
@@ -794,6 +794,18 @@ class SlideshowActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The only place watchdogRunnable is posted.
+     *
+     * It re-posts itself, so a bare postDelayed() adds a *permanent* second loop. That was the
+     * bug: exitSleep() posted it, then its own startActivity(REORDER_TO_FRONT) delivered
+     * onResume, which posted it again — one extra loop per presence wake, forever.
+     */
+    private fun restartWatchdog() {
+        handler.removeCallbacks(watchdogRunnable)
+        handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
+    }
+
     private fun togglePause() {
         // Tapping a sleeping frame wakes it rather than showing a pause icon on a black
         // screen. The override clears itself at the next scheduled boundary, so this
@@ -867,7 +879,7 @@ class SlideshowActivity : AppCompatActivity() {
         startPresenceIfEnabled()
         if (!isAsleep && !isPaused && photos.isNotEmpty()) {
             scheduleNext()
-            handler.postDelayed(watchdogRunnable, prefs.slideshowIntervalSeconds * 1000L)
+            restartWatchdog()
         }
     }
 
