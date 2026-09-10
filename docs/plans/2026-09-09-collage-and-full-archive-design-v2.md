@@ -631,6 +631,9 @@ reasoning with invented numbers and must be rewritten against these measured one
       calls usually carry, and does it rotate? Review flagged this as under-documented in §5.1.
 - [ ] Three device facts `portal-device-facts.txt` does not record and this design leans on:
       `MemTotal`, `ro.config.low_ram`, and the `/data` filesystem type.
-- [ ] `AlbumIndex` at ~6.6 MB: JSON or SQLite? JSON until measured.
+- [x] `AlbumIndex` at ~6.6 MB: JSON or SQLite? **Measured — JSON, comfortably.** 20,000
+      entries is **4.0 MB**, write 64 ms, read 60 ms (`AlbumIndexTest`). The 6.6 MB
+      estimate was high, and at 60 ms once per sync on a background thread there is no
+      case for a database.
 - [ ] Actual bucket distribution of the 20,000 — the √ damping in §7.1 is calibrated on an
       assumption. The first successful crawl answers it.
