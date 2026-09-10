@@ -46,6 +46,19 @@ class PhotoStore(context: Context) {
         val height: Int,
         val isVideo: Boolean,
         val captureMs: Long,
+        /**
+         * When this photo arrived in the library, from the file's mtime.
+         *
+         * Deliberately not the album's own "added" timestamp, which is not in [Entry] and
+         * would need a schema change to get there. The frame's question is "is this new
+         * *here*", and the mtime answers exactly that: it is the instant
+         * [writePhoto] renamed the file into place. A photo taken in 2019 and shared with
+         * the album today is new to this frame today, which is the reading the recency
+         * curation wants.
+         *
+         * Costs nothing extra: [load] already stats every file to check it exists.
+         */
+        val addedMs: Long,
     ) {
         val isPortrait: Boolean get() = height > width
     }
@@ -66,7 +79,7 @@ class PhotoStore(context: Context) {
         entries.mapNotNull { e ->
             val f = fileFor(e.id, e.isVideo)
             if (f.exists() && f.length() > 0) {
-                StoredPhoto(e.id, f, e.width, e.height, e.isVideo, e.captureMs)
+                StoredPhoto(e.id, f, e.width, e.height, e.isVideo, e.captureMs, f.lastModified())
             } else {
                 null
             }

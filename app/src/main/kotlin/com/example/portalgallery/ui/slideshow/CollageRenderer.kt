@@ -151,8 +151,46 @@ class CollageRenderer(
             return if (oldest == Long.MAX_VALUE) 0L else oldest
         }
 
+    /**
+     * Which slot [oldestRenderMs] is reporting, or -1 while any active slot is still in
+     * warm-up.
+     *
+     * The companion to [oldestRenderMs], and the reason it exists: a watchdog that knows
+     * only *that* the wall is stale cannot do the right thing about it. Redrawing the one
+     * offending tile needs its index.
+     */
+    val stalestSlot: Int
+        get() {
+            var worst = -1
+            var oldest = Long.MAX_VALUE
+            for (s in slots.indices) {
+                if (renderedAtMs[s] == 0L) return -1
+                if (renderedAtMs[s] < oldest) {
+                    oldest = renderedAtMs[s]
+                    worst = s
+                }
+            }
+            return worst
+        }
+
     /** What slot [slotIndex] was last asked to show, so a caller can avoid repeating it. */
     fun photoAt(slotIndex: Int): PhotoStore.StoredPhoto? = current.getOrNull(slotIndex)
+
+    /**
+     * Draws one slot again, out of the driver's turn, from a fresh [nextPhoto].
+     *
+     * For the watchdog. A tile stuck on a file that will not load holds its old timestamp
+     * and drags [oldestRenderMs] back, and the fix is to offer *that* tile a different
+     * photo — not to disturb the other five, which is what the full-screen path's
+     * `advance()` would do. The caller owns the retry bound; this method will happily be
+     * called forever.
+     */
+    fun refresh(slotIndex: Int) {
+        if (slotIndex !in slots.indices) return
+        val photo = nextPhoto?.invoke(slotIndex) ?: return
+        current[slotIndex] = photo
+        renderSlot(slotIndex, photo)
+    }
 
     // --- geometry -----------------------------------------------------------
 
@@ -495,13 +533,10 @@ class CollageRenderer(
 
     private fun swapOneTile() {
         if (slots.isEmpty()) return
-        val slot = nextSlot()
-        // Null means the caller has nothing to offer for this slot right now. The tile
-        // keeps what it has and simply forfeits its turn; the round moves on rather than
-        // retrying the same slot until it answers.
-        val photo = nextPhoto?.invoke(slot) ?: return
-        current[slot] = photo
-        renderSlot(slot, photo)
+        // Null inside refresh means the caller has nothing to offer for this slot right
+        // now. The tile keeps what it has and simply forfeits its turn; the round moves on
+        // rather than retrying the same slot until it answers.
+        refresh(nextSlot())
     }
 
     /**
