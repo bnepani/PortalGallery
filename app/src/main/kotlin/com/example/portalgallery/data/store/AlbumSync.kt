@@ -13,6 +13,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Refreshes the on-disk library from a Google Photos public share link.
@@ -119,9 +121,12 @@ class AlbumSync(private val store: PhotoStore) {
         val missing = wanted.filterKeys { !store.hasPhoto(it) }
         Log.i(TAG, "sync: ${wanted.size} in album, ${missing.size} to download")
 
-        var done = 0
-        var failures = 0
-        var resolutionChecked = false
+        // Mutated from CONCURRENCY coroutines at once. `failures++` on a plain Int is a
+        // read-modify-write and could overwrite the abort flag, defeating the resolution gate.
+        val done = AtomicInteger(0)
+        val failures = AtomicInteger(0)
+        val resolutionChecked = AtomicBoolean(false)
+        val aborted = AtomicBoolean(false)
 
         coroutineScope {
             missing.entries.chunked(CONCURRENCY).forEach { chunk ->
@@ -133,7 +138,7 @@ class AlbumSync(private val store: PhotoStore) {
                         // disabled, since that is the difference between a ~90MB
                         // library and one several times larger.
                         if (photo.isVideo && !includeVideos) {
-                            onProgress(++done, missing.size)
+                            onProgress(done.incrementAndGet(), missing.size)
                             return@async
                         }
 
@@ -142,31 +147,30 @@ class AlbumSync(private val store: PhotoStore) {
 
                         val bytes = runCatching { download(url) }.getOrNull()
                         if (bytes == null) {
-                            failures++
+                            failures.incrementAndGet()
                         } else {
                             // Resolution gate: catches the case where a URL silently
                             // resolves to a thumbnail. A count check cannot see this,
                             // because the count is unchanged. Stills only — the gate
                             // decodes a bitmap, which an MP4 is not.
-                            if (!photo.isVideo && !resolutionChecked) {
-                                resolutionChecked = true
+                            if (!photo.isVideo && resolutionChecked.compareAndSet(false, true)) {
                                 if (!isPlausiblePhoto(bytes)) {
                                     Log.e(TAG, "resolution gate FAILED — got a thumbnail, aborting sync")
-                                    failures = Int.MAX_VALUE
+                                    aborted.set(true)
                                     return@async
                                 }
                             }
                             store.writePhoto(id, bytes, photo.isVideo)
                         }
-                        onProgress(++done, missing.size)
+                        onProgress(done.incrementAndGet(), missing.size)
                     }
                 }.awaitAll()
 
-                if (failures == Int.MAX_VALUE) return@coroutineScope
+                if (aborted.get()) return@coroutineScope
             }
         }
 
-        if (failures == Int.MAX_VALUE) {
+        if (aborted.get()) {
             return@withContext Result.Failure("resolution gate failed — refusing to index thumbnails")
         }
 
@@ -206,7 +210,7 @@ class AlbumSync(private val store: PhotoStore) {
         Result.Success(
             albums = outcomes,
             total = entries.size,
-            added = missing.size - failures.coerceAtMost(missing.size),
+            added = missing.size - failures.get().coerceAtMost(missing.size),
             pruned = pruned,
             bytes = store.totalBytes(),
         )
