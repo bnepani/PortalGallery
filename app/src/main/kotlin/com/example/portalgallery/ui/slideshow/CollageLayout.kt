@@ -43,8 +43,8 @@ object CollageLayout {
      * for any landscape ratio.
      */
     private val LANDSCAPE = listOf(
-        // Three 640x1080 columns. The whole reason collage mode exists: on a landscape
-        // panel this is the only layout where a portrait photo fills its tile edge to edge.
+        // Three 640x1080 columns. The whole reason collage mode exists: three photos per
+        // pass drawn from the 56% the full-screen path throws away.
         Template(
             "thirds-portrait",
             (0 until 3).map { i -> Slot(i / 3f, 0f, (i + 1) / 3f, 1f, wantPortrait = true) },
@@ -58,10 +58,10 @@ object CollageLayout {
                 }
             },
         ),
-        // A 960x1080 hero beside four 480x540 cells. Every slot here is portrait, the
-        // small ones only just (480x540) — quartering the right half of a 16:9 panel
-        // tips each cell past square. Tagging them landscape by eye would hand them
-        // photos that letterbox.
+        // A 960x1080 hero beside four 480x540 cells. Every slot is portrait, the small
+        // ones only just: quartering the right half of a 16:9 panel tips each cell past
+        // square. They look like thumbnails and read as landscape, but tagging them that
+        // way would fill them with photos that letterbox.
         Template(
             "hero-left",
             listOf(Slot(0f, 0f, 0.5f, 1f, wantPortrait = true)) +
@@ -85,8 +85,8 @@ object CollageLayout {
                 Slot(0.7f, 0f, 1f, 1f, wantPortrait = true),
             ),
         ),
-        // A 1920x648 banner over three 640x432 cells — everything landscape, so this is
-        // the template that empties the landscape end of the library.
+        // A 1920x648 banner over three 640x432 cells. Every slot is landscape, which keeps
+        // the 44% that the full-screen path already serves in rotation too.
         Template(
             "banner-over-thirds",
             listOf(Slot(0f, 0f, 1f, 0.6f, wantPortrait = false)) +
@@ -118,7 +118,9 @@ object CollageLayout {
             "thirds-landscape",
             (0 until 3).map { i -> Slot(0f, i / 3f, 1f, (i + 1) / 3f, wantPortrait = false) },
         ),
-        // A 1080x960 hero above four 540x480 cells.
+        // A 1080x960 hero above four 540x480 cells — hero-left mirrored, and mirrored in
+        // the tagging trap too: on a 9:16 panel these cells land just short of square, so
+        // every slot is landscape.
         Template(
             "hero-top",
             listOf(Slot(0f, 0f, 1f, 0.5f, wantPortrait = false)) +
@@ -144,4 +146,16 @@ object CollageLayout {
     )
 
     fun forPanel(portrait: Boolean): List<Template> = if (portrait) PORTRAIT else LANDSCAPE
+
+    /**
+     * Template for the given rotation counter. Pure: the renderer swaps templates only
+     * behind a hero interlude, so this must not depend on wall-clock time.
+     *
+     * floorMod rather than %, because the counter is a plain Int on a frame that runs for
+     * months — it will eventually wrap negative, and % would then index out of bounds.
+     */
+    fun templateAt(portrait: Boolean, index: Int): Template {
+        val set = forPanel(portrait)
+        return set[Math.floorMod(index, set.size)]
+    }
 }

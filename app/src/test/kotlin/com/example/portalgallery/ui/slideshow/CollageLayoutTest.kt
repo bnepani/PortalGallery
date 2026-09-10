@@ -92,4 +92,21 @@ class CollageLayoutTest {
         val names = allTemplates().map { it.name }
         assertEquals(names.size, names.toSet().size)
     }
+
+    @Test
+    fun `template rotation is deterministic and eventually visits every template`() {
+        val set = CollageLayout.forPanel(portrait = false)
+        val seen = (0 until set.size * 3).map { CollageLayout.templateAt(portrait = false, index = it).name }
+        assertEquals(set.map { it.name }.toSet(), seen.toSet())
+        assertEquals(
+            CollageLayout.templateAt(portrait = false, index = 7).name,
+            CollageLayout.templateAt(portrait = false, index = 7).name,
+        )
+    }
+
+    @Test
+    fun `negative and large indices are safe`() {
+        CollageLayout.templateAt(portrait = false, index = -3)
+        CollageLayout.templateAt(portrait = false, index = Int.MAX_VALUE)
+    }
 }
