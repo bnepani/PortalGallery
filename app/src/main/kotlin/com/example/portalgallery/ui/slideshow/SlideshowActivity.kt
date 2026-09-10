@@ -29,6 +29,7 @@ import com.example.portalgallery.data.album.AlbumList
 import com.example.portalgallery.data.presence.PresenceDetector
 import com.example.portalgallery.data.presence.PresenceService
 import com.example.portalgallery.data.schedule.AwakePolicy
+import com.example.portalgallery.data.schedule.CollageSelector
 import com.example.portalgallery.data.schedule.PhotoSelector
 import com.example.portalgallery.data.schedule.SleepSchedule
 import com.example.portalgallery.data.schedule.WakeAlarm
@@ -47,6 +48,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlin.random.Random
 
 /**
  * The frame.
@@ -88,6 +90,27 @@ class SlideshowActivity : AppCompatActivity() {
 
         /** How far Ken Burns zooms over a full dwell. Subtle on purpose. */
         private const val KEN_BURNS_SCALE = 1.08f
+
+        /**
+         * How many whole-grid draws to try before accepting that a slot cannot be filled
+         * with something not already on the wall.
+         *
+         * CollageSelector de-duplicates within one call but knows nothing about the five
+         * tiles already up, so a single-slot draw can legitimately collide. Four attempts
+         * because each is a cheap pure-Kotlin pass and the alternative — a duplicate
+         * photograph in two tiles of a six-tile grid — is glaringly obvious on a wall.
+         */
+        private const val DEDUP_ATTEMPTS = 4
+
+        /**
+         * Consecutive watchdog retries of one stuck tile before it is left alone.
+         *
+         * The same reasoning as consecutiveFailures in showStill(): a library full of
+         * unreadable files must not spin the frame at full speed. Unlike the full-screen
+         * path there is nothing to fall back to, so it stops retrying and lets the tile
+         * keep its last good photo.
+         */
+        private const val MAX_SLOT_RETRIES = 3
     }
 
     private lateinit var binding: ActivitySlideshowBinding
@@ -112,8 +135,39 @@ class SlideshowActivity : AppCompatActivity() {
     /** Which ImageView currently holds the visible photo. Flips on every advance. */
     private var frontIsA = true
 
+    // --- collage state ---
+    //
+    // All of it inert while prefs.collageEnabled is false: collageMode() gates every
+    // entry point, so the single-photo path below runs exactly as it did before collage
+    // existed. That fallback is the reason the two modes are kept side by side rather
+    // than unified.
+
+    private lateinit var collage: CollageRenderer
+
+    /**
+     * The tile pool: the whole library, minus videos, optionally narrowed to today's
+     * weekday. **Not** [photos] — that one is orientation-filtered, and slot tags do the
+     * orientation matching now. Passing the filtered set would throw away the portrait
+     * photographs the tags exist to put back on screen.
+     */
+    private var collagePool: List<PhotoStore.StoredPhoto> = emptyList()
+
+    /** Advances only behind a hero, so the grid is never seen reflowing. */
+    private var templateRotation = 0
+
+    /** Feeds CollageSelector's per-grid bucket rotation; every draw gets a fresh value. */
+    private var gridRotation = 0
+
+    /** True from the moment a hero interlude starts until the grid is back. */
+    private var heroActive = false
+
+    /** Consecutive watchdog retries per slot; reset whenever the wall is healthy. */
+    private val slotRetries = IntArray(CollageLayout.MAX_SLOTS)
+
     private val handler = Handler(Looper.getMainLooper())
     private val advanceRunnable = Runnable { advance() }
+    private val heroRunnable = Runnable { startHero() }
+    private val heroEndRunnable = Runnable { endHero() }
 
     private val front: ImageView get() = if (frontIsA) binding.ivPhotoA else binding.ivPhotoB
     private val back: ImageView get() = if (frontIsA) binding.ivPhotoB else binding.ivPhotoA
@@ -121,14 +175,18 @@ class SlideshowActivity : AppCompatActivity() {
     /** Post this only through [restartWatchdog] — see its KDoc for why. */
     private val watchdogRunnable = object : Runnable {
         override fun run() {
-            val interval = prefs.slideshowIntervalSeconds * 1000L
-            val stalled = !isPaused && !isAsleep &&
-                photos.isNotEmpty() &&
-                lastRenderedAtMs > 0 &&
-                System.currentTimeMillis() - lastRenderedAtMs > interval * 3
-            if (stalled) {
-                Log.w(TAG, "watchdog: no render in ${interval * 3}ms, forcing advance")
-                advance()
+            if (collageMode() && collage.visible && !heroActive) {
+                checkCollageStall()
+            } else {
+                val interval = prefs.slideshowIntervalSeconds * 1000L
+                val stalled = !isPaused && !isAsleep &&
+                    photos.isNotEmpty() &&
+                    lastRenderedAtMs > 0 &&
+                    System.currentTimeMillis() - lastRenderedAtMs > interval * 3
+                if (stalled) {
+                    Log.w(TAG, "watchdog: no render in ${interval * 3}ms, forcing advance")
+                    advance()
+                }
             }
             // Via restartWatchdog() rather than a bare postDelayed, so that stays the
             // single post site — and so any stray duplicate loop is removed the next
@@ -158,6 +216,24 @@ class SlideshowActivity : AppCompatActivity() {
         // state from it — detection must outlive this Activity.
         presence = PresenceDetector.get(this)
         startPresenceIfEnabled()
+
+        // `this` as the Context, not applicationContext: Glide ties its request manager to
+        // the Activity lifecycle, and tile loads must not outlive it.
+        collage = CollageRenderer(
+            context = this,
+            container = binding.flCollage,
+            tiles = listOf(
+                CollageRenderer.Tile(binding.flSlot0, binding.ivTile0a, binding.ivTile0b),
+                CollageRenderer.Tile(binding.flSlot1, binding.ivTile1a, binding.ivTile1b),
+                CollageRenderer.Tile(binding.flSlot2, binding.ivTile2a, binding.ivTile2b),
+                CollageRenderer.Tile(binding.flSlot3, binding.ivTile3a, binding.ivTile3b),
+                CollageRenderer.Tile(binding.flSlot4, binding.ivTile4a, binding.ivTile4b),
+                CollageRenderer.Tile(binding.flSlot5, binding.ivTile5a, binding.ivTile5b),
+            ),
+            prefs = prefs,
+            handler = handler,
+        )
+        collage.nextPhoto = { slot -> pickForSlot(slot) }
 
         applyConfigIntent(intent)
 
@@ -255,9 +331,15 @@ class SlideshowActivity : AppCompatActivity() {
         lifecycleScope.launch {
             library = withContext(Dispatchers.IO) { store.load() }
             applyOrientationFilter()
-            Log.i(TAG, "loaded ${library.size} photos, ${photos.size} match orientation")
+            applyCollagePool()
+            Log.i(TAG, "loaded ${library.size} photos, ${photos.size} match orientation, " +
+                "${collagePool.size} in the tile pool")
 
-            if (photos.isNotEmpty()) {
+            if (collageMode()) {
+                binding.tvStatus.visibility = View.GONE
+                startCollage()
+                restartWatchdog()
+            } else if (photos.isNotEmpty()) {
                 binding.tvStatus.visibility = View.GONE
                 show(0)
                 scheduleNext()
@@ -337,6 +419,22 @@ class SlideshowActivity : AppCompatActivity() {
 
         library = fresh
         applyOrientationFilter(preserveId = currentId)
+        applyCollagePool()
+
+        if (collageMode()) {
+            // A running wall needs no nudge: the driver draws from collagePool every tick,
+            // so new photos enter the rotation on their own. Only the first-content case
+            // has to do anything.
+            if (binding.tvStatus.visibility == View.VISIBLE) {
+                binding.tvStatus.visibility = View.GONE
+            }
+            if (!collage.visible && !isAsleep && !isPaused) {
+                startCollage()
+                restartWatchdog()
+            }
+            return
+        }
+
         if (photos.isEmpty()) return
 
         if (binding.tvStatus.visibility == View.VISIBLE) {
@@ -345,6 +443,244 @@ class SlideshowActivity : AppCompatActivity() {
             scheduleNext()
             restartWatchdog()
         }
+    }
+
+    // --- collage ------------------------------------------------------------
+
+    /**
+     * Whether the grid should be driving the frame right now.
+     *
+     * Read from prefs on every call rather than cached, so toggling collage in settings
+     * takes effect on the next onResume without any extra plumbing. The pool check is what
+     * makes an all-video or empty library fall back to the single-photo path instead of
+     * showing an empty grid.
+     */
+    private fun collageMode(): Boolean = prefs.collageEnabled && collagePool.isNotEmpty()
+
+    private fun isPanelPortrait(): Boolean =
+        resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+
+    private fun currentTemplate(): CollageLayout.Template =
+        CollageLayout.templateAt(isPanelPortrait(), templateRotation)
+
+    private fun heroIntervalMs(): Long =
+        prefs.heroIntervalMinutes.coerceAtLeast(1) * 60_000L
+
+    /**
+     * Recomputes the tile pool. Call wherever [library] or the day changes.
+     *
+     * Videos are excluded: a clip plays as a hero, never in a tile. Six VideoViews is
+     * heavy, and one corner of the wall talking while five photographs sit still reads as
+     * a fault rather than a feature.
+     *
+     * The weekday filter still applies, and relaxes the way PhotoSelector's does — an
+     * album shot over one weekend contributes nothing Monday to Friday, and an empty wall
+     * is the outcome every filter here is written to avoid.
+     */
+    private fun applyCollagePool() {
+        val stills = library.filterNot { it.isVideo }
+        collagePool = if (prefs.weekdayFilterEnabled) {
+            val zone = ZoneId.systemDefault()
+            val today = LocalDate.now().dayOfWeek
+            stills.filter { PhotoSelector.matchesWeekday(it.captureMs, today, zone) }
+                .ifEmpty { stills }
+        } else {
+            stills
+        }
+    }
+
+    private fun curationConfig() = CollageSelector.Config(
+        eraMix = prefs.curationEraMix,
+        onThisDay = prefs.curationOnThisDay,
+        recency = prefs.curationRecency,
+    )
+
+    /** One photo per slot for the current template, in slot order. */
+    private fun selectGrid(): List<PhotoStore.StoredPhoto> = CollageSelector.fill(
+        candidates = collagePool,
+        slots = currentTemplate().slots,
+        config = curationConfig(),
+        today = LocalDate.now(),
+        zone = ZoneId.systemDefault(),
+        rotation = gridRotation++,
+        random = Random.Default,
+        isPortrait = { it.isPortrait },
+        captureMs = { it.captureMs },
+        addedMs = { it.addedMs },
+    )
+
+    /**
+     * A replacement photo for one tile, avoiding anything already on the wall.
+     *
+     * CollageSelector fills a whole grid and de-duplicates inside that one call, but it
+     * has no idea what the other five tiles are currently showing — so a single-slot draw
+     * can collide, and a photograph appearing twice in a six-tile grid is the first thing
+     * anyone would notice. [CollageRenderer.photoAt] exists for exactly this check.
+     *
+     * Draw a whole grid and keep this slot's pick, retrying a bounded number of times.
+     * That is more work than drawing one photo, but it keeps every curation rule — era
+     * stratification, the reserved recency slot, the relax cascade — in one place rather
+     * than reimplementing a lesser copy here.
+     */
+    private fun pickForSlot(slot: Int): PhotoStore.StoredPhoto? {
+        if (collagePool.isEmpty()) return null
+        val template = currentTemplate()
+        if (slot !in template.slots.indices) return null
+
+        val onScreen = buildSet {
+            for (i in template.slots.indices) {
+                if (i != slot) collage.photoAt(i)?.id?.let { add(it) }
+            }
+        }
+
+        repeat(DEDUP_ATTEMPTS) {
+            val pick = selectGrid().getOrNull(slot) ?: return null
+            if (pick.id !in onScreen) return pick
+        }
+
+        // Every draw collided. Fall back to any resident photo that is not on the wall,
+        // preferring the slot's shape — better a photograph the curation did not choose
+        // than the same one twice.
+        val want = template.slots[slot].wantPortrait
+        return collagePool.firstOrNull { it.id !in onScreen && it.isPortrait == want }
+            ?: collagePool.firstOrNull { it.id !in onScreen }
+    }
+
+    /**
+     * Shows the grid and starts the driver. Safe to call when it is already running.
+     *
+     * The full setup only runs when the grid is not already up, so an onResume does not
+     * reload six tiles for nothing.
+     */
+    private fun startCollage() {
+        handler.removeCallbacks(heroRunnable)
+        handler.removeCallbacks(heroEndRunnable)
+        heroActive = false
+        slotRetries.fill(0)
+
+        if (!collage.visible) {
+            val metrics = resources.displayMetrics
+            collage.applyTemplate(currentTemplate(), metrics.widthPixels, metrics.heightPixels)
+            collage.setSelection(selectGrid())
+            // Fade the layer in rather than cutting: the tiles underneath are whatever the
+            // last grid or hero left, and a hard swap to a new template shows them for a
+            // frame in their new positions.
+            binding.flCollage.alpha = 0f
+            collage.visible = true
+            binding.flCollage.animate()
+                .alpha(1f)
+                .setDuration(prefs.transitionMs.toLong())
+                .start()
+        }
+        collage.start()
+        handler.postDelayed(heroRunnable, heroIntervalMs())
+    }
+
+    /**
+     * Takes the grid down and cancels everything it owns.
+     *
+     * Authoritative and idempotent, because it is what the going-dark paths call —
+     * enterSleep, onPause, onDestroy — and each can arrive mid-crossfade or mid-hero. It
+     * cancels the container animation explicitly: a withEndAction does not run on a
+     * cancelled animation, so a fade interrupted by sleep would otherwise leave the layer
+     * half-transparent and still marked visible.
+     */
+    private fun stopCollage() {
+        handler.removeCallbacks(heroRunnable)
+        handler.removeCallbacks(heroEndRunnable)
+        heroActive = false
+        binding.flCollage.animate().cancel()
+        binding.flCollage.alpha = 1f
+        collage.stop()
+        collage.visible = false
+    }
+
+    /**
+     * Interrupts the grid with one full-screen photograph.
+     *
+     * Reuses [show] and so the existing crossfade, full-screen Ken Burns and video path —
+     * a hero is exactly what the frame did before collage existed. Hero selection goes
+     * through [photos], not [collagePool], because [PhotoSelector]'s orientation filter is
+     * the right rule for a photo that fills the whole panel.
+     */
+    private fun startHero() {
+        if (isAsleep || isPaused || !collageMode()) return
+        if (photos.isEmpty()) {
+            // Nothing the full-screen path can show — an all-portrait library on a
+            // landscape panel relaxes to something, so this is close to unreachable, but
+            // skipping the interlude beats blanking the wall.
+            handler.postDelayed(heroRunnable, heroIntervalMs())
+            return
+        }
+        heroActive = true
+        collage.stop()
+
+        // Load underneath first, then fade the grid off it. show() drives its own
+        // crossfade on the A/B pair, so the two overlap into one transition.
+        show(currentIndex)
+        binding.flCollage.animate()
+            .alpha(0f)
+            .setDuration(prefs.transitionMs.toLong())
+            .withEndAction { collage.visible = false }
+            .start()
+
+        // A clip ends the hero when it finishes playing; a still gets one normal dwell.
+        if (photos[currentIndex].isVideo) return
+        handler.postDelayed(heroEndRunnable, prefs.slideshowIntervalSeconds * 1000L)
+    }
+
+    /**
+     * Returns to the grid, changing the template on the way.
+     *
+     * **This is the only place the template changes.** Applying one in view moves every
+     * tile at once; doing it while the hero still covers the panel means the grid is never
+     * seen reflowing. [startCollage] does the applying, which is why the rotation is
+     * bumped before it and the layer is forced hidden first.
+     */
+    private fun endHero() {
+        handler.removeCallbacks(heroEndRunnable)
+        handler.removeCallbacks(advanceRunnable)
+        heroActive = false
+        if (isAsleep || isPaused || !collageMode()) return
+
+        stopVideo()
+        templateRotation++
+        collage.visible = false
+        startCollage()
+    }
+
+    /**
+     * Redraws the one tile that has gone stale, rather than disturbing the grid.
+     *
+     * The full-screen watchdog answers a stall with advance(). For a wall that is the
+     * wrong response: one tile stuck on a file that will not load would restart all six.
+     * [CollageRenderer.stalestSlot] names the culprit and [CollageRenderer.refresh] offers
+     * it a different photo, bounded by [MAX_SLOT_RETRIES] for the same reason
+     * consecutiveFailures bounds showStill() — a corrupt library must not spin the frame
+     * at full speed.
+     */
+    private fun checkCollageStall() {
+        if (isPaused || isAsleep) return
+        val oldest = collage.oldestRenderMs
+        // 0 means some slot has never drawn. The grid fills one tile per tick, so a
+        // freshly started wall legitimately looks like this and it is not a stall.
+        if (oldest == 0L) return
+
+        // A tile is due once per round, and a round is one tick per slot. Three rounds of
+        // slack before calling it stuck, matching the full-screen path's interval * 3.
+        val round = prefs.collageTileSwapMs.toLong() * currentTemplate().slots.size
+        if (System.currentTimeMillis() - oldest <= round * 3) {
+            slotRetries.fill(0)
+            return
+        }
+
+        val slot = collage.stalestSlot
+        if (slot < 0 || slot >= slotRetries.size) return
+        if (slotRetries[slot] >= MAX_SLOT_RETRIES) return
+        slotRetries[slot]++
+        Log.w(TAG, "watchdog: tile $slot stale for ${System.currentTimeMillis() - oldest}ms, " +
+            "redrawing (attempt ${slotRetries[slot]}/$MAX_SLOT_RETRIES)")
+        collage.refresh(slot)
     }
 
     // --- sleep --------------------------------------------------------------
@@ -403,7 +739,18 @@ class SlideshowActivity : AppCompatActivity() {
 
         Log.i(TAG, "date rolled over to ${today.dayOfWeek} — re-selecting photos")
         applyOrientationFilter(preserveId = photos.getOrNull(currentIndex)?.id)
-        if (photos.isNotEmpty() && !isAsleep) {
+        applyCollagePool()
+        if (isAsleep) return
+
+        if (collageMode()) {
+            // The pool has changed under the grid, so replace what is up rather than
+            // waiting for six ticks to cycle yesterday's photos out one at a time. No
+            // template change: this is not a hero, and the grid must not be seen reflowing.
+            collage.setSelection(selectGrid())
+            return
+        }
+
+        if (photos.isNotEmpty()) {
             show(currentIndex)
             scheduleNext()
         }
@@ -450,6 +797,9 @@ class SlideshowActivity : AppCompatActivity() {
 
         handler.removeCallbacks(advanceRunnable)
         handler.removeCallbacks(watchdogRunnable)
+        // Before the view resets below: this cancels the tile animations and the hero
+        // timers, so nothing is left mid-crossfade behind a dark panel.
+        stopCollage()
         binding.ivPhotoA.animate().cancel()
         binding.ivPhotoB.animate().cancel()
         // Critical: a clip left running would keep playing audio into a dark room.
@@ -518,7 +868,10 @@ class SlideshowActivity : AppCompatActivity() {
 
         binding.ivPhotoA.visibility = View.VISIBLE
         binding.ivPhotoB.visibility = View.VISIBLE
-        if (photos.isNotEmpty()) {
+        if (collageMode()) {
+            startCollage()
+            restartWatchdog()
+        } else if (photos.isNotEmpty()) {
             show(currentIndex)
             scheduleNext()
             restartWatchdog()
@@ -566,11 +919,26 @@ class SlideshowActivity : AppCompatActivity() {
         val before = photos.size
         val currentId = photos.getOrNull(currentIndex)?.id
         applyOrientationFilter(preserveId = currentId)
+        applyCollagePool()
         val now = if (newConfig.orientation == Configuration.ORIENTATION_PORTRAIT)
             "portrait" else "landscape"
         Log.i(TAG, "rotated to $now: $before -> ${photos.size} photos in rotation")
 
-        if (photos.isNotEmpty() && !isAsleep) {
+        if (isAsleep) return
+
+        if (collageMode()) {
+            // The two orientations have different template sets — CollageLayout.forPanel
+            // returns 5 landscape and 4 portrait — so a counter that meant one template
+            // before the rotation means an unrelated one after. templateAt uses floorMod
+            // so any value is safe to index with, but carrying it across is meaningless;
+            // starting the new orientation at its first template is at least predictable.
+            templateRotation = 0
+            collage.visible = false
+            startCollage()
+            return
+        }
+
+        if (photos.isNotEmpty()) {
             show(currentIndex)
             scheduleNext()
         }
@@ -632,7 +1000,9 @@ class SlideshowActivity : AppCompatActivity() {
 
     private fun endVideoAndAdvance() {
         stopVideo()
-        advance()
+        // A clip shown as a hero ends the interlude when it finishes, rather than handing
+        // over to the single-photo advance loop that is not running in collage mode.
+        if (heroActive) endHero() else advance()
     }
 
     private fun stopVideo() {
@@ -800,6 +1170,11 @@ class SlideshowActivity : AppCompatActivity() {
         if (isAsleep) return
         // A playing clip advances on completion, not on a timer.
         if (binding.vvVideo.visibility == View.VISIBLE) return
+        // In collage mode the grid drives itself and a hero ends on its own timer, so this
+        // loop must stay parked. show() and advance() are still reachable — a hero uses
+        // them, and so does a failed hero load — and without this guard either would start
+        // the full-screen slideshow running underneath the wall.
+        if (collageMode()) return
         if (!isPaused) {
             handler.postDelayed(advanceRunnable, prefs.slideshowIntervalSeconds * 1000L)
         }
@@ -881,6 +1256,10 @@ class SlideshowActivity : AppCompatActivity() {
         AppForeground.onActivityPaused()
         handler.removeCallbacks(advanceRunnable)
         handler.removeCallbacks(watchdogRunnable)
+        // onPause is reachable without sleeping — settings, the Portal launcher, the
+        // Assistant — and the plan named only enterSleep. Missing it here would leave the
+        // driver decoding tile bitmaps into an Activity nobody can see.
+        stopCollage()
         // The sleep tick deliberately keeps running. Cancelling it here was the bug that
         // stopped the frame waking: the panel powering off pauses the Activity, which
         // removed the only callback still evaluating the schedule. The alarm is the real
@@ -897,9 +1276,16 @@ class SlideshowActivity : AppCompatActivity() {
         handler.post(sleepTickRunnable)
         // Presence may have been toggled in settings while we were away.
         startPresenceIfEnabled()
-        if (!isAsleep && !isPaused && photos.isNotEmpty()) {
-            scheduleNext()
-            restartWatchdog()
+        if (!isAsleep && !isPaused) {
+            // Collage may have been toggled in settings while we were away, and prefs are
+            // read fresh by collageMode(), so this is also where a mode switch lands.
+            if (collageMode()) {
+                startCollage()
+                restartWatchdog()
+            } else if (photos.isNotEmpty()) {
+                scheduleNext()
+                restartWatchdog()
+            }
         }
     }
 
@@ -907,6 +1293,10 @@ class SlideshowActivity : AppCompatActivity() {
         super.onDestroy()
         isInForeground = false
         handler.removeCallbacksAndMessages(null)
+        // removeCallbacksAndMessages already dropped the driver and the hero timers; this
+        // is for the view state — cancelling animations still running on the tiles, which
+        // hold Glide targets.
+        stopCollage()
         stopVideo()
         // Deliberately NOT presence.stop(). The detector belongs to PresenceService and
         // has to keep running after this Activity dies — stopping it here is what left
