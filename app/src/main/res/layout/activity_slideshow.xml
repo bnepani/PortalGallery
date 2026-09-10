@@ -31,6 +31,168 @@
         android:scaleType="fitCenter" />
 
     <!--
+      The collage layer: a FIXED pool of six slot frames, each holding its own A/B pair.
+      Templates move these frames by rewriting their layoutParams. Nothing in here is
+      ever inflated, and no template may ask for more than the six slots that exist —
+      see CollageLayout.MAX_SLOTS.
+
+      Fixed rather than inflated per template, for the reason given at the top of this
+      file: Glide's ViewTarget is keyed on the view, so loading into the same view again
+      cancels the request before it. A freshly inflated tile is a fresh target every
+      time the template changes, which is the leak the CustomTarget approach had.
+
+      Each pair gets its own FrameLayout because scale and translation are transform
+      properties, applied when the parent composites the child — they are NOT clipped to
+      the child's own layout rect. A bare ImageView scaled for Ken Burns would therefore
+      draw over the tiles beside it, and since siblings paint in order, the higher-index
+      tile would win. The frame clips its two children, so the effect stays in its slot.
+
+      centerCrop, not fitCenter: a tile has to fill its rect. A letterboxed photo in one
+      cell of a grid reads as a rendering fault rather than as a photo that did not fit.
+      It is also what makes Glide apply its scale-only CenterCrop, which crops the bitmap
+      down to the tile AND keeps the decode eligible for a hardware config — see the load
+      site in CollageRenderer before changing it to anything else.
+    -->
+    <FrameLayout
+        android:id="@+id/fl_collage"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/fl_slot_0"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_0a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_0b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fl_slot_1"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_1a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_1b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fl_slot_2"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_2a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_2b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fl_slot_3"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_3a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_3b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fl_slot_4"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_4a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_4b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/fl_slot_5"
+            android:layout_width="0dp"
+            android:layout_height="0dp">
+
+            <ImageView
+                android:id="@+id/iv_tile_5a"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <ImageView
+                android:id="@+id/iv_tile_5b"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:alpha="0"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+    </FrameLayout>
+
+    <!--
       Sits above the photo layers and is only visible while a clip plays. A plain
       VideoView rather than ExoPlayer/Media3: these are local MP4 files off disk, which
       MediaPlayer handles fine, and Media3 would add several megabytes of dependency for

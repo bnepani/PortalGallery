@@ -54,6 +54,7 @@ class SettingsActivity : AppCompatActivity() {
         bindQuietHours()
         bindVideo()
         bindWeekday()
+        bindCollage()
         bindPresence()
         showAlbumStatus()
 
@@ -248,6 +249,120 @@ class SettingsActivity : AppCompatActivity() {
             if (prefs.weekdayFilterEnabled && matching == 0 && library.isNotEmpty()) {
                 append("\n\nNothing matches today, so the frame is showing everything ")
                 append("rather than going blank.")
+            }
+        }
+    }
+
+    private fun bindCollage() {
+        binding.swCollage.isChecked = prefs.collageEnabled
+        binding.swCollage.setOnCheckedChangeListener { _, checked ->
+            prefs.collageEnabled = checked
+            refreshCollageEnabled()
+        }
+
+        // Stored in ms, offered in seconds — a slider in milliseconds would need 14,000
+        // steps to cover the same range.
+        binding.sliderCollageSwap.value =
+            (prefs.collageTileSwapMs / 1000f).coerceIn(1f, 15f).let { Math.round(it * 2) / 2f }
+        binding.sliderCollageSwap.addOnChangeListener { _, value, _ ->
+            prefs.collageTileSwapMs = (value * 1000).toInt()
+            updateCollageLabels()
+        }
+
+        binding.sliderHero.value = prefs.heroIntervalMinutes.toFloat().coerceIn(1f, 30f)
+        binding.sliderHero.addOnChangeListener { _, value, _ ->
+            prefs.heroIntervalMinutes = value.toInt()
+            updateCollageLabels()
+        }
+
+        binding.swEraMix.isChecked = prefs.curationEraMix
+        binding.swEraMix.setOnCheckedChangeListener { _, checked ->
+            prefs.curationEraMix = checked
+            updateCurationStatus()
+        }
+        binding.swOnThisDay.isChecked = prefs.curationOnThisDay
+        binding.swOnThisDay.setOnCheckedChangeListener { _, checked ->
+            prefs.curationOnThisDay = checked
+            updateCurationStatus()
+        }
+        binding.swRecency.isChecked = prefs.curationRecency
+        binding.swRecency.setOnCheckedChangeListener { _, checked ->
+            prefs.curationRecency = checked
+            updateCurationStatus()
+        }
+
+        updateCollageLabels()
+        updateCollageStatus()
+        updateCurationStatus()
+        refreshCollageEnabled()
+    }
+
+    private fun updateCollageLabels() {
+        val swapSeconds = prefs.collageTileSwapMs / 1000f
+        binding.tvCollageSwapLabel.text =
+            getString(R.string.settings_collage_swap) + "  ${"%.1f".format(swapSeconds)}s"
+        val m = prefs.heroIntervalMinutes
+        binding.tvHeroLabel.text = getString(R.string.settings_hero) +
+            "  $m ${if (m == 1) "minute" else "minutes"}"
+    }
+
+    /**
+     * The curation rows only mean anything while the grid is running, so grey them out
+     * rather than leaving three switches that silently do nothing.
+     */
+    private fun refreshCollageEnabled() {
+        val on = prefs.collageEnabled
+        listOf(
+            binding.swEraMix, binding.swOnThisDay, binding.swRecency,
+            binding.sliderCollageSwap, binding.sliderHero,
+        ).forEach {
+            it.isEnabled = on
+            it.alpha = if (on) 1f else 0.4f
+        }
+        updateCollageStatus()
+    }
+
+    /**
+     * Says what the grid can actually draw from, because the answer is not obvious and it
+     * is the whole point of the feature: the full-screen path shows only photos matching
+     * the panel's orientation, and collage slots use both.
+     */
+    private fun updateCollageStatus() {
+        val library = PhotoStore(this).load()
+        val stills = library.filterNot { it.isVideo }
+        val portrait = stills.count { it.isPortrait }
+        val landscape = stills.size - portrait
+
+        binding.tvCollageStatus.text = if (!prefs.collageEnabled) {
+            "Off — one photo at a time, filling the screen."
+        } else buildString {
+            append("On — up to 6 photos at once, one changing at a time.\n\n")
+            append("${stills.size} photos available: $portrait portrait, $landscape landscape. ")
+            append("A single full-screen photo can only use one of those two; collage slots ")
+            append("are shaped for both, so all ${stills.size} stay in rotation.")
+            if (library.size > stills.size) {
+                append("\n\n${library.size - stills.size} videos play as full-screen ")
+                append("interludes, never in a tile.")
+            }
+        }
+    }
+
+    private fun updateCurationStatus() {
+        binding.tvCurationStatus.text = buildString {
+            if (!prefs.curationEraMix && !prefs.curationOnThisDay && !prefs.curationRecency) {
+                append("All off — photos are drawn at random.")
+                return@buildString
+            }
+            if (prefs.curationEraMix) {
+                append("Each grid draws from several different years rather than one day. ")
+            }
+            if (prefs.curationOnThisDay) {
+                append("Photos taken on today's date in past years are favoured; if none ")
+                append("match, the grid fills normally rather than emptying. ")
+            }
+            if (prefs.curationRecency) {
+                append("One slot is held for photos added in the last few weeks, so new ")
+                append("arrivals show up within minutes instead of waiting their turn.")
             }
         }
     }

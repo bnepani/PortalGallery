@@ -117,6 +117,64 @@ class AppPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_WEEKDAY_FILTER, false)
         set(value) = prefs.edit().putBoolean(KEY_WEEKDAY_FILTER, value).apply()
 
+    /**
+     * Show several photos at once in a grid rather than one full-screen.
+     *
+     * On by default, unlike the filters above. Those default off because each can thin the
+     * rotation to nothing; collage cannot — CollageSelector fills every slot or repeats a
+     * photo rather than leaving a black tile. It also puts the orientation filter's
+     * discards back on screen: a landscape panel drops every portrait photo, which is a
+     * third of the frame album and over half of the trip fixture.
+     */
+    var collageEnabled: Boolean
+        get() = prefs.getBoolean(KEY_COLLAGE, true)
+        set(value) = prefs.edit().putBoolean(KEY_COLLAGE, value).apply()
+
+    /**
+     * Milliseconds between single-tile swaps in the living wall.
+     *
+     * One tile at a time, not the whole grid: six tiles at 3.3s each turns the grid over
+     * at roughly the same rate as a 20s whole-grid swap, without the visual reset.
+     */
+    var collageTileSwapMs: Int
+        get() = prefs.getInt(KEY_COLLAGE_SWAP_MS, 3_300)
+        set(value) = prefs.edit().putInt(KEY_COLLAGE_SWAP_MS, value).apply()
+
+    /** Minutes of grid between full-screen hero interludes. Also the seam where the
+     *  layout template changes, so the grid is never seen reflowing. */
+    var heroIntervalMinutes: Int
+        get() = prefs.getInt(KEY_HERO_INTERVAL_MIN, 5)
+        set(value) = prefs.edit().putInt(KEY_HERO_INTERVAL_MIN, value).apply()
+
+    /** Each grid spans several years rather than one afternoon. On by default: it
+     *  restratifies the draw rather than narrowing it, so it cannot thin the rotation. */
+    var curationEraMix: Boolean
+        get() = prefs.getBoolean(KEY_CURATION_ERA, true)
+        set(value) = prefs.edit().putBoolean(KEY_CURATION_ERA, value).apply()
+
+    /**
+     * Boost photos taken on today's calendar date in previous years.
+     *
+     * Off by default, for the same reason as [weekdayFilterEnabled] and more so: this is
+     * 1-in-365 where that is 1-in-7, and plenty of dates will match nothing at all.
+     */
+    var curationOnThisDay: Boolean
+        get() = prefs.getBoolean(KEY_CURATION_OTD, false)
+        set(value) = prefs.edit().putBoolean(KEY_CURATION_OTD, value).apply()
+
+    /**
+     * Reserve one slot per grid for recently added photos.
+     *
+     * On by default, and load-bearing. With era mix on and no reservation, a specific new
+     * photo competes against its whole year bucket and surfaces roughly once every 33
+     * hours — against every ~40 minutes on today's 300-photo single-photo rotation. The
+     * reservation makes "photos the family adds actually show up" structural rather than
+     * a matter of probability.
+     */
+    var curationRecency: Boolean
+        get() = prefs.getBoolean(KEY_CURATION_RECENCY, true)
+        set(value) = prefs.edit().putBoolean(KEY_CURATION_RECENCY, value).apply()
+
     /** Camera presence detection. Off by default — this turns on a camera in someone's
      *  living room and should be an explicit choice, never a surprise. */
     var presenceEnabled: Boolean
@@ -167,6 +225,12 @@ class AppPreferences(context: Context) {
         private const val KEY_VIDEO_AUDIO = "video_audio_enabled"
         private const val KEY_VIDEO_VOLUME = "video_volume"
         private const val KEY_WEEKDAY_FILTER = "weekday_filter"
+        private const val KEY_COLLAGE = "collage_enabled"
+        private const val KEY_COLLAGE_SWAP_MS = "collage_swap_ms"
+        private const val KEY_HERO_INTERVAL_MIN = "hero_interval_min"
+        private const val KEY_CURATION_ERA = "curation_era_mix"
+        private const val KEY_CURATION_OTD = "curation_on_this_day"
+        private const val KEY_CURATION_RECENCY = "curation_recency"
         private const val KEY_PRESENCE = "presence_enabled"
         private const val KEY_ABSENCE_TIMEOUT = "absence_timeout_min"
     }
