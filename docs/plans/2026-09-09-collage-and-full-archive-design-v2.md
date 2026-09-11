@@ -763,3 +763,64 @@ it — if the template changed in view, the grid would visibly reflow, and it do
   triggered on demand.
 - A *weekly* re-roll of the resident sample and the two-generation grace, which by
   definition needs two complete crawls a week apart.
+
+---
+
+## 11f. Release deploy, 2026-09-10
+
+Signed R8 build deployed via `tools/deploy-portal.sh RELEASE=1`. Clean install (debug and
+release are signed with different keys, so an update is impossible and the data wipe is
+unavoidable). 23 MB against the debug build's 28 MB. **Zero crashes.**
+
+```
+loaded 0 photos                                     ← true first run
+Na5Li2hwZPuU: 19974 items across 67 page(s)
+crawl accepted (prune=true): first complete crawl, 19974 items
+sync ok: 1500 on disk of 19974 indexed, 499MB
+```
+
+Crawl 2m15s, full 1,500-photo download 10m5s.
+
+### R8 nearly broke the index silently
+
+`proguard-rules.pro` predated Phase 2 and kept `PhotoStore$Entry` but not
+`AlbumIndex$Snapshot` or its `Entry`. Renamed fields would make every `load()` return
+null — which is a *legitimate* state meaning "no index yet", so nothing would error. The
+frame would simply re-crawl all 67 pages every sync, never accumulate a previous
+generation, and never apply the grace period. Fixed, and verified in the shipped artifact:
+`baseUrl`, `captureMs`, `addedMs`, `crawledAtMs`, `pageCount` and `resident` all survive as
+literal strings in the release dex.
+
+Proven at runtime too. A second sync logged `complete crawl of 1 album(s)` rather than
+`first complete crawl` — that message only comes from the `previous != null` branch, so the
+index round-tripped under obfuscation.
+
+### The device found a bug no test could
+
+The second sync also revealed that the resident sample was being re-rolled **every** sync
+rather than weekly: 1,113 of 1,500 photographs replaced, library 499 MB → 856 MB in one
+pass, because the grace period correctly kept the generation being replaced. At the
+six-hourly refresh, ~1.3 GB of downloads a day to show the same album.
+
+Every property the test suite checks — sample size, era spread, newest pinned, no
+duplicates — held perfectly on every one of those churning samples. The defect was in *how
+often a correct function was called*, which is only visible across syncs on a real clock.
+
+Fixed with `ResidentSelector.carryForward` and `Snapshot.sampleRolledAtMs`. Confirmed on
+device:
+
+```
+sync: 19974 in album, 1500 resident, 0 to download
+sync ok: 1500 on disk of 19974 indexed, 498MB
+```
+
+Zero downloads, no re-roll, and the library returned from 859 MB to 498 MB as prune
+reclaimed the stale generation. Sync now completes in ~2s after the crawl.
+
+### Verified on the release build
+
+- Full crawl, complete, `prune=true`, on a clean install and on subsequent syncs
+- Index round-trip under R8 obfuscation
+- Weekly re-roll cadence, with carry-forward in between
+- Two-generation grace, then reclamation — observed end to end
+- Screensaver off, CAMERA granted, quiet hours 00:00–07:00
