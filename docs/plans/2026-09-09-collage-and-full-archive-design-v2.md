@@ -637,7 +637,7 @@ Portal went offline before the deploy, so the whole of Phase 2 is compile-and-re
 | `ResidentSelector` | ✅ 13 tests |
 | `AlbumSync` rework | ✅ compiles, wired, untested on hardware |
 | Migration (§11) | ✅ no special path needed — see below |
-| On-device verification | ❌ **outstanding** |
+| On-device verification | ✅ **passed** — see §11e |
 
 ### Migration needs no code
 
@@ -658,7 +658,10 @@ existing index deserialises as it always did.
    prune then deletes. `PhotoStore.load()` filters missing files so it self-heals, but a
    sync reporting a total it has just invalidated makes a later bug harder to read.
 
-### What the device run still has to establish
+### What the device run established — see §11e for results
+
+The list below is what it was asked to prove. All of it passed, after three
+device-only bugs were found and fixed.
 
 - A 67-page crawl against the live album from the app, not from a Python script.
 - The first-run download of ~1,200 new photos (~360 MB) and how long it actually takes.
@@ -684,3 +687,71 @@ existing index deserialises as it always did.
       case for a database.
 - [ ] Actual bucket distribution of the 20,000 — the √ damping in §7.1 is calibrated on an
       assumption. The first successful crawl answers it.
+
+---
+
+## 11e. Phase 2 on-device verification, 2026-09-10
+
+Ran on the Portal+ over the existing install. **Phase 2 works.**
+
+```
+Na5Li2hwZPuU: 19974 items across 67 page(s)
+crawl accepted (prune=true): first complete crawl, 19974 items
+sync: 19974 in album, 1500 resident, 1086 to download
+sync ok: 1500 on disk of 19974 indexed, 498MB from 1/1 albums
+```
+
+| | Before Phase 2 | After |
+|---|---|---|
+| Photos on disk | 293 | **1,500** |
+| Items indexed | — | **19,974** |
+| Capture span on disk | 2026-05 .. 2026-09 (3 months) | **2019-04-27 .. 2026-09-01** |
+| Per-year on disk | one bucket | 194 / 193 / 183 / 172 / 111 / 178 / 107 / 362 |
+| Library size | 109 MB | 498 MB of 12.6 GB free |
+| Portrait split | — | 472 / 1028 (31.5%, matching the 33% measurement) |
+
+Crawl 2m18s; download of 1,086 photos ~8 min. `album_index.json` is **7.5 MB** for 19,974
+entries — higher than the 4.0 MB the synthetic test predicted, because real base URLs are
+longer than the test's. Still trivial, and the JSON decision stands.
+
+The 2026 bucket holds 362 against ~110–195 for every other year, which is `PIN_NEWEST`
+working as intended: the newest 300 are unconditionally resident, and era stratification
+distributes the rest.
+
+### Three device-only bugs, none of which the JVM could catch
+
+1. **Android's regex engine rejected the patterns.** ICU treats a bare `}` as a syntax
+   error where the JVM accepts it as a literal, so `AlbumPager` threw
+   `PatternSyntaxException` at class-init and crashed the app on launch — with all 149
+   unit tests green, because those run on the JVM.
+2. **The end-of-album marker is an empty string.** This cost two runs. The Python probe
+   looped on `while tok:`, which stops on `""` because Python treats it as falsy; the same
+   logic written as `token != null` runs past the end of the album. Also hardened against
+   a non-string marker, since `isJsonPrimitive` accepts a number and `asString` renders
+   `0` as a usable-looking cursor.
+3. **No no-progress guard.** Added: a page adding zero new ids means the cursor is not
+   advancing, since pages are disjoint by construction.
+
+### C11 worked before anyone knew there was a bug
+
+The most valuable result of the run. Bug 2 sent the first crawl to the 400-page ceiling.
+Every layer behaved:
+
+```
+hit the 400-page ceiling with a token still pending — treating as incomplete
+19974 items across 400 page(s) (INCOMPLETE)
+crawl accepted (prune=false): 1 album(s) truncated — adding only, nothing removed
+```
+
+A runaway crawl was detected, marked incomplete, and **refused permission to delete
+anything** — on its first encounter with a real failure, caused by a bug nobody had found
+yet. That is precisely the scenario three reviewers named as the likeliest way the project
+fails, and the guard held.
+
+### Still not verified
+
+- Hero interludes and the behind-the-hero template swap (unverified since Phase 1).
+- `collageEnabled = false` fallback.
+- The `AlbumSync` abort-path cleanup, which needs a degraded parse to reach.
+- A *weekly* re-roll of the resident sample and the two-generation grace, which by
+  definition needs more than one complete crawl a week apart.
