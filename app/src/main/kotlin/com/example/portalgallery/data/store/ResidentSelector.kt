@@ -101,6 +101,44 @@ object ResidentSelector {
     }
 
     /**
+     * The sample to use when it is not yet time to re-roll.
+     *
+     * **Why this exists.** [choose] draws a fresh random sample every time it is called,
+     * and calling it on every sync is ruinous: measured on the device, a second sync
+     * replaced 1,113 of 1,500 photographs, the grace period correctly held on to the
+     * previous generation, and the library went from 499 MB to 856 MB in one pass. At the
+     * six-hourly refresh that is about 1.3 GB of downloads a day, forever, to show the
+     * same album. The design always said "re-rolled weekly"; only the re-rolling got
+     * built.
+     *
+     * So between re-rolls the sample is carried forward instead. Two things still change:
+     * items that have left the album are dropped, and the newest [pinNewest] are pulled in
+     * unconditionally — which is what lets a photograph added this morning reach the frame
+     * this afternoon without waiting for the weekly roll. Anything short of [target] after
+     * that is topped up from the carried set, so the sample neither shrinks nor churns.
+     */
+    fun carryForward(
+        index: List<AlbumIndex.Entry>,
+        previousResident: List<String>,
+        target: Int,
+        pinNewest: Int,
+    ): List<AlbumIndex.Entry> {
+        if (index.isEmpty() || target <= 0) return emptyList()
+        val byId = index.associateBy { it.id }
+        val chosen = LinkedHashSet<AlbumIndex.Entry>()
+
+        // Newest first, so a new arrival displaces the oldest carried item rather than
+        // being dropped when the sample is already full.
+        newestFirst(index).take(pinNewest.coerceAtMost(target)).forEach { chosen.add(it) }
+
+        for (id in previousResident) {
+            if (chosen.size >= target) break
+            byId[id]?.let { chosen.add(it) }
+        }
+        return chosen.toList()
+    }
+
+    /**
      * Ids that may not be deleted: this sample and the one before it.
      *
      * The two-generation grace that replaced v1's eviction scheme. The renderer holds a

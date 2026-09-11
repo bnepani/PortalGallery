@@ -83,6 +83,18 @@ class AlbumSync(
         /** Default sample size. ~1,500 x 301 KB measured mean is about 450 MB. */
         const val DEFAULT_RESIDENT_TARGET = 1_500
 
+        /**
+         * How long a resident sample is kept before a fresh one is drawn.
+         *
+         * A week. Long enough that the download cost is negligible amortised, short
+         * enough that the wall visibly changes over a month. Anything much shorter is
+         * expensive in a way that is easy to miss: a re-roll replaces most of the sample,
+         * and the previous generation is deliberately kept alive by the grace period, so
+         * the true cost of a re-roll is a few hundred megabytes of downloads plus a
+         * temporarily doubled library.
+         */
+        const val RESAMPLE_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
+
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
     }
@@ -189,13 +201,38 @@ class AlbumSync(
         // before sampling rather than after, so turning video off does not silently spend
         // part of the sample on items that will never be downloaded.
         val eligible = merged.values.filter { includeVideos || !it.isVideo }
-        val resident = ResidentSelector.choose(
-            index = eligible,
-            target = residentTarget,
-            pinNewest = PIN_NEWEST,
-            zone = ZoneId.systemDefault(),
-            random = Random.Default,
-        )
+
+        // Re-roll on a slow cadence, carry forward in between.
+        //
+        // Drawing a fresh sample every sync is ruinous, and the device proved it: one
+        // extra sync replaced 1,113 of 1,500 photographs and took the library from 499MB
+        // to 856MB, because the grace period correctly kept the generation being replaced.
+        // At the six-hourly refresh that is ~1.3GB of downloads a day to show the same
+        // album. Carrying forward still admits new photographs immediately — the newest
+        // PIN_NEWEST are pulled in on every sync — it just stops the other 1,200 churning.
+        val rolledAt = previous?.sampleRolledAtMs ?: 0L
+        val dueForRoll = rolledAt <= 0L ||
+            System.currentTimeMillis() - rolledAt >= RESAMPLE_INTERVAL_MS ||
+            previous?.resident.isNullOrEmpty()
+
+        val resident = if (dueForRoll) {
+            Log.i(TAG, "re-rolling the resident sample")
+            ResidentSelector.choose(
+                index = eligible,
+                target = residentTarget,
+                pinNewest = PIN_NEWEST,
+                zone = ZoneId.systemDefault(),
+                random = Random.Default,
+            )
+        } else {
+            ResidentSelector.carryForward(
+                index = eligible,
+                previousResident = previous?.resident ?: emptyList(),
+                target = residentTarget,
+                pinNewest = PIN_NEWEST,
+            )
+        }
+        val sampleRolledAtMs = if (dueForRoll) System.currentTimeMillis() else rolledAt
         val wanted = LinkedHashMap<String, AlbumIndex.Entry>()
         resident.forEach { wanted[it.id] = it }
 
@@ -354,6 +391,7 @@ class AlbumSync(
                 complete = mayPrune,
                 items = merged.values.toList(),
                 resident = resident.map { it.id },
+                sampleRolledAtMs = sampleRolledAtMs,
             )
         )
 

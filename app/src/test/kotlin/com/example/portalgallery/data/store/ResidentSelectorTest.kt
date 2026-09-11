@@ -143,4 +143,62 @@ class ResidentSelectorTest {
     fun `keepIds handles a first run with no previous generation`() {
         assertEquals(setOf("a"), ResidentSelector.keepIds(listOf(AlbumIndex.Entry(id = "a")), emptyList()))
     }
+
+    // --- carrying forward between re-rolls ------------------------------------
+
+    @Test
+    fun `carrying forward keeps the sample stable`() {
+        // The bug this exists for: choose() draws fresh every call, and calling it every
+        // sync replaced 1,113 of 1,500 photos on the device, taking the library from
+        // 499MB to 856MB in one pass because the grace period held the old generation.
+        // At the six-hourly refresh that is ~1.3GB of downloads a day for the same album.
+        val archive = realisticArchive()
+        val first = choose(archive, 1500)
+        val carried = ResidentSelector.carryForward(
+            archive, first.map { it.id }, target = 1500, pinNewest = 300)
+
+        assertEquals(1500, carried.size)
+        val churn = (carried.map { it.id }.toSet() subtract first.map { it.id }.toSet()).size
+        assertEquals("carrying forward must not churn at all here", 0, churn)
+    }
+
+    @Test
+    fun `carrying forward still admits brand new photos`() {
+        // Stability must not cost freshness: a photo added this morning has to reach the
+        // frame this afternoon, not next week when the sample is re-rolled.
+        val archive = realisticArchive()
+        val first = choose(archive, 1500)
+
+        val fresh = (1..20).map {
+            AlbumIndex.Entry(id = "BRANDNEW$it", baseUrl = "https://x/pw/n$it",
+                width = 4000, height = 3000, captureMs = ms(2027), addedMs = ms(2027))
+        }
+        val carried = ResidentSelector.carryForward(
+            archive + fresh, first.map { it.id }, target = 1500, pinNewest = 300)
+
+        assertEquals(1500, carried.size)
+        assertTrue("every brand new photo must be resident",
+            carried.map { it.id }.containsAll(fresh.map { it.id }))
+    }
+
+    @Test
+    fun `carrying forward drops items that left the album`() {
+        val archive = realisticArchive()
+        val first = choose(archive, 1500)
+        val gone = first.take(50).map { it.id }.toSet()
+        val shrunk = archive.filterNot { it.id in gone }
+
+        val carried = ResidentSelector.carryForward(
+            shrunk, first.map { it.id }, target = 1500, pinNewest = 300)
+        assertTrue("removed items must not be carried",
+            carried.none { it.id in gone })
+    }
+
+    @Test
+    fun `carrying forward from nothing still produces a usable sample`() {
+        val carried = ResidentSelector.carryForward(
+            realisticArchive(), emptyList(), target = 1500, pinNewest = 300)
+        assertEquals("only the pinned newest are available with no previous sample",
+            300, carried.size)
+    }
 }

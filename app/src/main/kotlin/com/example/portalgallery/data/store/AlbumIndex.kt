@@ -103,6 +103,15 @@ class AlbumIndex(private val root: File) {
          * sample while the renderer is holding an older list of photos.
          */
         val resident: List<String> = emptyList(),
+        /**
+         * When [resident] was last drawn fresh, as opposed to carried forward.
+         *
+         * Re-rolling is expensive — a new sample means downloading most of it — so it
+         * happens on a slow cadence and this is what paces it. 0 means "never rolled",
+         * which an index written before this field existed also reads as, and which
+         * correctly forces one roll on the next sync.
+         */
+        val sampleRolledAtMs: Long = 0L,
     ) {
         val size: Int get() = items.size
     }
