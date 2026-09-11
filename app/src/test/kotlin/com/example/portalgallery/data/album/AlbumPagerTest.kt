@@ -142,6 +142,33 @@ class AlbumPagerTest {
         }
     }
 
+
+    @Test
+    fun `a non-string end-of-album marker is not mistaken for a token`() {
+        // Two device runs were lost to this. The last page of the album returns an EMPTY
+        // STRING here — not null, not a missing field. The Python probe stopped correctly
+        // because "" is falsy in Python; Kotlin's `token != null` is not, so the crawl ran
+        // past the end. `0` and `false` are covered too: isJsonPrimitive alone accepts
+        // them and asString renders them as usable-looking text.
+        listOf("0", "false", "null", "\"\"", "\"   \"").forEach { marker ->
+            val payload = """[null,[["ID1",["https://lh3.googleusercontent.com/pw/AP1GczX",100,200]]],$marker]"""
+            val body = ")]}'\n\n99\n[[\"wrb.fr\",\"snAcKc\",${com.google.gson.JsonPrimitive(payload)}]]\n"
+            val page = AlbumPager.parseResponse(body)
+            assertEquals(1, page.photos.size)
+            assertNull("marker '$marker' must not be read as a token", page.nextToken)
+            assertTrue("a page with no token ends the album", page.complete)
+        }
+    }
+
+    @Test
+    fun `a real string token is still read`() {
+        val payload = """[null,[["ID1",["https://lh3.googleusercontent.com/pw/AP1GczX",100,200]]],"AH_uQ40REALTOKEN"]"""
+        val body = ")]}'\n\n99\n[[\"wrb.fr\",\"snAcKc\",${com.google.gson.JsonPrimitive(payload)}]]\n"
+        val page = AlbumPager.parseResponse(body)
+        assertEquals("AH_uQ40REALTOKEN", page.nextToken)
+        assertFalse(page.complete)
+    }
+
     // --- endpoint extraction -------------------------------------------------
 
     @Test

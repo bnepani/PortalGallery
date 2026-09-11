@@ -133,8 +133,23 @@ object SharedAlbumParser {
             }.getOrNull()
         }
 
+        // The token must be a non-empty *string*, and both halves of that are load-bearing.
+        //
+        // The last page of a paginated album returns an **empty string** here, not null and
+        // not a missing field. The Python probe that proved this RPC works looped on
+        // `while tok:` and stopped correctly, because Python treats "" as falsy — so the
+        // difference never showed up until the same logic was written in Kotlin, where
+        // `token != null` is perfectly happy with "". The first device run therefore ran
+        // one page past the end, and the run before that ran 333 pages past it.
+        //
+        // `isString` guards the other half: `isJsonPrimitive` alone accepts a number or a
+        // boolean, and `asString` will render either as text, so a `0` end-marker would
+        // become the string "0" and read as a perfectly good cursor.
         val token = runCatching {
-            data[2].takeIf { it.isJsonPrimitive }?.asString
+            data[2]
+                .takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString
+                ?.takeIf { it.isNotBlank() }
         }.getOrNull()
 
         return photos to token

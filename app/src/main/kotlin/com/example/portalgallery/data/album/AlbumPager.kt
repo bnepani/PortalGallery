@@ -68,9 +68,18 @@ object AlbumPager {
 
     class PagerException(message: String) : Exception(message)
 
-    private val DS1_REQUEST = Regex("""'ds:1'.*?request:(\[.*?])\s*}""", RegexOption.DOT_MATCHES_ALL)
-    private val SERVICE_REQUESTS = Regex("""AF_dataServiceRequests\s*=\s*(\{.*?});""", RegexOption.DOT_MATCHES_ALL)
-    private val WIZ_DATA = Regex("""WIZ_global_data\s*=\s*(\{.*?});""", RegexOption.DOT_MATCHES_ALL)
+    // Every brace and bracket is escaped, including the closing ones.
+    //
+    // The JVM's regex engine accepts a bare `}` and `]` as literals; Android's ICU engine
+    // does not, and throws PatternSyntaxException at class-init time. These patterns
+    // therefore compiled fine under every unit test and crashed the app on the device the
+    // first time it launched — the tests run on the JVM, the frame does not.
+    private val DS1_REQUEST =
+        Regex("""'ds:1'.*?request:(\[.*?\])\s*\}""", RegexOption.DOT_MATCHES_ALL)
+    private val SERVICE_REQUESTS =
+        Regex("""AF_dataServiceRequests\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
+    private val WIZ_DATA =
+        Regex("""WIZ_global_data\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
 
     /** The rpc the page declares for `ds:1`. Verified present in the committed fixture. */
     const val RPC_ID = "snAcKc"

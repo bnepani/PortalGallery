@@ -446,7 +446,25 @@ class AlbumSync(
                 break
             }
             pages++
+            val before = items.size
             page.photos.forEach { p -> AlbumIndex.entryOf(p, url)?.let { items[it.id] = it } }
+
+            // A page that adds nothing new means the cursor is not advancing, whatever the
+            // server says about there being more. Pages are disjoint by construction, so
+            // zero new ids is never legitimate progress.
+            //
+            // This is a second line of defence behind the token type check in
+            // SharedAlbumParser. The first device run read an end-of-album marker as a
+            // cursor and spent 333 extra requests re-fetching before MAX_PAGES stopped it;
+            // this catches the same shape on the very next page instead, whatever causes
+            // it next time.
+            if (items.size == before) {
+                Log.w(TAG, "$short: page $pages added no new items — the cursor is not " +
+                    "advancing, stopping at ${items.size}")
+                complete = false
+                break
+            }
+
             token = page.nextToken
             complete = page.complete
             if (token == null) break
