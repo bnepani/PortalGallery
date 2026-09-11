@@ -14,6 +14,25 @@
     <fields>;
 }
 
+# AlbumIndex.Snapshot and its Entry are the Phase 2 equivalents, written to
+# album_index.json — ~20,000 entries describing the whole album, against the few
+# hundred files PhotoStore knows about.
+#
+# Losing these is worse than losing the PhotoStore rule, and quieter. Renamed fields
+# make every load() return null, which the code reads as "no index" — a legitimate
+# state meaning a first run. So the frame would not error: it would silently re-crawl
+# all 67 pages on every sync, never accumulate a previous generation, and therefore
+# never apply the two-generation grace that stops the resident sample churning. The
+# symptom is a frame that quietly re-downloads photographs forever.
+-keep class com.example.portalgallery.data.store.AlbumIndex$Entry { *; }
+-keepclassmembers class com.example.portalgallery.data.store.AlbumIndex$Entry {
+    <fields>;
+}
+-keep class com.example.portalgallery.data.store.AlbumIndex$Snapshot { *; }
+-keepclassmembers class com.example.portalgallery.data.store.AlbumIndex$Snapshot {
+    <fields>;
+}
+
 # Gson uses generic type information from signatures for TypeToken.
 -keepattributes Signature
 -keepattributes *Annotation*
