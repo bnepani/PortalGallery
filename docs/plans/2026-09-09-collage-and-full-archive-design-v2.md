@@ -748,10 +748,18 @@ anything** — on its first encounter with a real failure, caused by a bug nobod
 yet. That is precisely the scenario three reviewers named as the likeliest way the project
 fails, and the guard held.
 
+### Hero interludes — verified by observation, 2026-09-10
+
+Confirmed working on the wall by watching the frame. This had been outstanding since
+Phase 1 and could not have been closed any other way: the interlude is a five-minute
+cadence, and what it needed to establish was whether the grid-to-hero-to-grid transition
+*reads* well, which no assertion can answer. The behind-the-hero template swap comes with
+it — if the template changed in view, the grid would visibly reflow, and it does not.
+
 ### Still not verified
 
-- Hero interludes and the behind-the-hero template swap (unverified since Phase 1).
-- `collageEnabled = false` fallback.
-- The `AlbumSync` abort-path cleanup, which needs a degraded parse to reach.
+- `collageEnabled = false` fallback. Needs interaction with the settings screen.
+- The `AlbumSync` abort-path cleanup, which needs a degraded parse to reach and cannot be
+  triggered on demand.
 - A *weekly* re-roll of the resident sample and the two-generation grace, which by
-  definition needs more than one complete crawl a week apart.
+  definition needs two complete crawls a week apart.
